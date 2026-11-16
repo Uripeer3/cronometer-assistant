@@ -28,6 +28,11 @@ def create_read_only_server(connection: ReadOnlyConnection, *, product_service=N
                 "the same proposal against its marked remote food. Barcode is local metadata only: "
                 "never claim app barcode scanning works. The public checklist does not submit or "
                 "publish anything; guide the documented manual flow when requested. "
+                "After reviewing package photos and verifying the private food, offer public "
+                "submission once if the user has not already requested or declined it. Retaining "
+                "photos privately and sharing them with Cronometer are separate actions. "
+                "This MCP surface does not archive or upload images: only say photos were filed "
+                "when the host provides a durable file reference or verified archive result. "
                 if product_service
                 else "It cannot create drafts or save products. "
             )

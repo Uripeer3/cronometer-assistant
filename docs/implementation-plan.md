@@ -1,6 +1,6 @@
 # Conversational Cronometer logger — implementation plan
 
-Prepared 16 November 2026. Status: conversational prototype, real-account food lookup, and a controlled private-food creation have been exercised. Live UI review exposed serving-type, category and label-display gaps; creation fixes are under review. Live diary writes, automated existing-food corrections and public-food submission are not yet implemented.
+Prepared 16 November 2026. Status: conversational prototype, real-account food lookup, and a controlled private-food creation have been exercised. Live UI review exposed serving-type, category and label-display gaps; creation fixes are merged. Automatic photo intake/archive and public-upload integration remain pending. Live diary writes, automated existing-food corrections and public-food submission are not yet implemented.
 
 ## Goal and agreed preferences
 
@@ -126,6 +126,27 @@ Acceptance: an absent packaged product can be created from a bilingual label, fo
 
 Reference: [Cronometer's publishing workflow](https://support.cronometer.com/hc/en-us/articles/360018652672-Publishing-a-food-to-the-CRDB-Database). This establishes the user-facing workflow, not the existence of an integration endpoint.
 
+## Product photos: retain privately, offer submission separately
+
+Product evidence is retained even if the user declines public submission. For the current pilot, the host can retain the original photos and materialize private local copies; the MCP server itself has no image-intake/archive or upload tool yet. Never turn a photo reference or a checklist into a claim that Cronometer received the image.
+
+### Next implementation: durable evidence attached to the product
+
+- Store original package-front, nutrition-table and barcode photos under private application data, outside Git. Also retain an existing durable host/Library reference when available; do not create duplicate Library items for already retained photos.
+- Associate evidence with the proposal ID, eventual Cronometer food ID and label/formulation version. Record role, SHA-256, MIME type, byte size and original filename. Use content-based duplicate detection and preserve both original evidence and any separately prepared submission copy.
+- Add a supported host-to-service transfer/import path rather than making the model reconstruct image bytes or exposing arbitrary server paths. Validate file type and size, install files atomically with private permissions, and test restart, duplicate attachment and incomplete transfer behavior. A reference-only record must explicitly distinguish retained host bytes from verified local bytes.
+- Expose an evidence review tool returning roles, durable references and missing requirements. It must distinguish privately archived, attached/uploaded to Cronometer, and included in a submitted review request. Read-back of a food alone verifies none of these image states.
+
+### Assistant policy and submission journal
+
+1. After identity/label review and successful private-food verification, ask once whether to submit an eligible packaged product to Cronometer for public review. Do not ask again when the user already requested or declined submission. Photo retention continues independently.
+2. Persist the choice (`not_asked`, `requested`, `declined` or `deferred`) per product/version. A new or changed photo does not silently grant publication permission. Retain the user's existing request while collecting missing evidence; do not ask them to approve the same submission repeatedly.
+3. For a requested submission, verify the existing food and collect missing barcode, package-front and nutrition-table evidence. Show that submission shares product evidence with Cronometer's curation team and may lead to publication; no approval time or acceptance is guaranteed.
+4. Implement separate prepare, submit and status/reconciliation operations only after verifying the actual interface. Until upload/submission support exists, use Cronometer's authenticated Publish Food flow. Keep `prepared`, `submitted_pending`, `accepted`, `rejected` and `unknown` distinct. A lost response requires status checking before another submission.
+5. Keep originals privately even when submission is declined or rejected. Never include credentials, account details, diary records or unrelated attachments in the submission package.
+
+Acceptance: an unfamiliar packaged food supplied by photos can be saved and revisited without another photo request; evidence survives restarts and is linked to the right formulation; the assistant offers submission once; a decline causes no upload; an existing request resumes at missing evidence; and a submission is reported only after a visible or API receipt. A controlled test of the manual flow precedes promises of automatic public submission.
+
 ## Custom-food usability and correction gate
 
 Complete this gate before public-submission testing. A successful API response and matching numeric values alone do not establish that the food is usable in Cronometer.
@@ -202,7 +223,7 @@ Suggested pilot targets, to calibrate with use rather than guarantee: familiar m
 
 ## Immediate next implementation task
 
-Finish the custom-food usability fixes and their live acceptance checks, then add the reviewed existing-food correction workflow above. Keep the current creation-only transport boundary until that narrowly scoped edit path is implemented and tested. Public-submission preparation may follow user review, but direct upload/submission support remains unimplemented.
+Deploy the merged custom-food usability fixes and complete their live acceptance checks. Add durable photo intake/evidence review and the one-time submission-choice journal, then the reviewed existing-food correction workflow above. Keep the current creation-only transport boundary until that narrowly scoped edit path is implemented and tested. Public-submission preparation may follow user review, but direct upload/submission support remains unimplemented.
 
 The next main logging milestone is connecting real food resolution to persistent meal drafts and verified diary add/correct/undo operations. Confirm the account timezone, meal groups and duplicate recovery before the first scoped diary test. Continue the phone voice compatibility check; select always-on hosting after the phone workflow is validated.
 
