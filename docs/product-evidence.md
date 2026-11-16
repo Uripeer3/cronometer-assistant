@@ -29,3 +29,29 @@ Morning test: transfer synthetic or selected product images to the inbox, import
 front and label, repeat the imports, restart, then review. Corrupt/remove a test
 copy and verify it is reported unavailable. Decline public submission and verify
 that evidence stays private and retained.
+
+## Publication choice and manual outcomes
+
+`set_product_submission_choice` persists requested/declined/deferred with an
+expected revision. Retrieve `prepare_public_food_submission` to resume. The
+assistant asks once, then follows the recorded choice; a new photo is not consent.
+Declining preserves every evidence record. Changing choice after an actual
+submission cannot retract what Cronometer already received.
+
+`set_product_barcode` checks GTIN/EAN/UPC length and checksum without changing the
+proposal's creation identity or claiming the barcode was linked in Cronometer.
+The checklist re-reads the private food and checks archived front/label bytes.
+A reference-only photo cannot satisfy local archive readiness. These checks do
+not verify that images are legible or that a valid barcode identifies this variant.
+
+`record_manual_submission_outcome` records an operator observation/receipt, always
+attributed as operator_reported and independently_verified=false. It does not send
+anything. Outcomes are submitted_pending, accepted, rejected or unknown. Do not
+record a receipt based on a tool intention, file upload or inferred success.
+Unknown blocks a fresh submission recommendation until the operator checks it.
+Accepted/rejected require a preceding submission/unknown outcome; curation remains
+Cronometer's decision. Do not place credentials or diary details in receipt text.
+
+Morning test: request once, add a missing barcode later, restart and resume without
+another approval. Exercise decline and defer separately. Simulate a lost response;
+verify the result stays unknown and no upload or automatic repeat occurs.

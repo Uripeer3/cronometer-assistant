@@ -10,6 +10,7 @@ from .evidence import EvidenceArchive
 from .models import ValidationError, normalized, number, text
 from .nutrition import normalize_label
 from .store import Store
+from .submission import SubmissionJournal, validate_barcode
 
 NUTRIENT_IDS = {
     "energy": 208,
@@ -29,6 +30,7 @@ NUTRIENT_IDS = {
 class ProductService:
     def __init__(self, store: Store, client, *, evidence_inbox=None):
         self.store, self.client = store, client
+        self.submissions = SubmissionJournal(store)
         self.evidence = EvidenceArchive(store, store.path.parent / "evidence", inbox=evidence_inbox)
         account = client.user_id
         with store.locked():
@@ -314,17 +316,91 @@ class ProductService:
             )
 
     def public_submission_checklist(self, proposal_id: str):
+        product = self._product(proposal_id)
+        journal = self.submissions.get(proposal_id)
+        verified = False
+        if product.get("remote_food_id") and product.get("payload"):
+            try:
+                verified = self._matches(self.client.get_food(product["remote_food_id"]), product)
+            except Exception:
+                verified = False
+        evidence = self.evidence.review(proposal_id)
+        retained = {row["role"] for row in evidence if row["local_bytes_verified"]}
+        barcode = product.get("submission_barcode") or product.get("barcode")
+        try:
+            validate_barcode(barcode)
+            barcode_valid = True
+        except ValidationError:
+            barcode_valid = False
+        checks = {
+            "verified_private_food": verified,
+            "valid_barcode": barcode_valid,
+            "package_front_archived": "package_front" in retained,
+            "nutrition_label_archived": "nutrition_label" in retained,
+        }
         return self.response(
-            self._product(proposal_id),
-            submitted=False,
-            public=False,
+            product,
+            submission=journal,
+            submitted=journal["status"] in {"submitted_pending", "accepted", "rejected"},
+            public=journal["status"] == "accepted",
+            outcome_source=journal.get("outcome_source"),
+            independently_verified=False,
+            should_offer_submission=(
+                verified and bool(evidence) and journal["choice"] == "not_asked"
+            ),
+            ready_for_manual_submission=all(checks.values())
+            and journal["choice"] == "requested"
+            and journal["status"] == "not_submitted",
+            checks=checks,
+            missing_requirements=[key for key, passed in checks.items() if not passed],
             requirements=[
                 "Verified private food",
                 "Barcode",
                 "Package-front photo",
                 "Nutrition-label photo",
             ],
+            barcode_linked=False,
             next_step="Use Cronometer's Publish Food flow; automated submission is not implemented",
+            evidence=evidence,
+            remote_food_changed=False,
+        )
+
+    def set_submission_choice(self, proposal_id, expected_revision, choice):
+        self._product(proposal_id)
+        return self.response(
+            submission=self.submissions.update(proposal_id, expected_revision, choice=choice),
+            remote_food_changed=False,
+        )
+
+    def record_submission_outcome(self, proposal_id, expected_revision, status, receipt):
+        product = self._product(proposal_id)
+        context = {
+            "remote_food_id": product.get("remote_food_id"),
+            "barcode": product.get("submission_barcode") or product.get("barcode"),
+            "evidence_ids": [r["evidence_id"] for r in self.evidence.review(proposal_id)],
+        }
+        return self.response(
+            submission=self.submissions.update(
+                proposal_id, expected_revision, status=status, receipt=receipt, context=context
+            ),
+            independently_verified=False,
+            remote_food_changed=False,
+        )
+
+    def set_submission_barcode(self, proposal_id, barcode):
+        barcode = validate_barcode(barcode)
+        with self.store.locked():
+            product = self._product(proposal_id)
+            # Never change the creation identity or a previously sent request payload.
+            old = product.get("submission_barcode") or product.get("barcode")
+            if self.submissions.get(proposal_id)["status"] != "not_submitted" and old != barcode:
+                raise ValidationError(
+                    "Submission already has an outcome; keep its barcode unchanged"
+                )
+            product["submission_barcode"] = barcode
+            self.store.put("product_proposals", proposal_id, product)
+        return self.response(
+            product, barcode_valid=True, barcode_linked=False, remote_food_changed=False
         )
 
     def attach_evidence_reference(self, proposal_id, role, provider, reference):

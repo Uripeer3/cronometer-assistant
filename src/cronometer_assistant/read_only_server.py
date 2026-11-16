@@ -28,7 +28,7 @@ def create_read_only_server(connection: ReadOnlyConnection, *, product_service=N
                 "the same proposal against its marked remote food. Barcode is local metadata only: "
                 "never claim app barcode scanning works. The public checklist does not submit or "
                 "publish anything; guide the documented manual flow when requested. "
-                "After reviewing package photos and verifying the private food, offer public "
+                "After reviewing package photos and verifying the private food, use the persisted choice and offer public "
                 "submission once if the user has not already requested or declined it. Retaining "
                 "photos privately and sharing them with Cronometer are separate actions. "
                 "Photo import requires the host to transfer files into the configured inbox first. "
@@ -155,5 +155,37 @@ def create_read_only_server(connection: ReadOnlyConnection, *, product_service=N
         def get_product_evidence(proposal_id: str) -> dict:
             """Review retained references and recheck archived bytes without uploading."""
             return call(product_service.review_evidence, proposal_id)
+
+        @server.tool(annotations={"readOnlyHint": False, "destructiveHint": False})
+        def set_product_submission_choice(
+            proposal_id: str, expected_revision: int, choice: str
+        ) -> dict:
+            """Remember the user's requested/declined/deferred choice; never uploads/submits."""
+            return call(
+                product_service.set_submission_choice, proposal_id, expected_revision, choice
+            )
+
+        @server.tool(annotations={"readOnlyHint": False, "destructiveHint": False})
+        def set_product_barcode(proposal_id: str, barcode: str) -> dict:
+            """Validate and retain a barcode locally; does not link it in Cronometer."""
+            return call(product_service.set_submission_barcode, proposal_id, barcode)
+
+        @server.tool(annotations={"readOnlyHint": False, "destructiveHint": False})
+        def record_manual_submission_outcome(
+            proposal_id: str, expected_revision: int, status: str, receipt: str
+        ) -> dict:
+            """Record an operator-observed outcome, never claim API verification.
+
+            Use only after the operator observed Cronometer's receipt/status.
+            Status: submitted_pending, accepted, rejected or unknown. A timeout is
+            unknown; inspect before resubmitting. No network submission occurs here.
+            """
+            return call(
+                product_service.record_submission_outcome,
+                proposal_id,
+                expected_revision,
+                status,
+                receipt,
+            )
 
     return server

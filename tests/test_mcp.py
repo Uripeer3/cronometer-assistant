@@ -211,3 +211,16 @@ class MCPTests(unittest.TestCase):
             )
             self.assertTrue(payload(created)["created"])
             self.assertFalse(payload(created)["real_diary_changed"])
+            choice = payload(
+                await server.call_tool(
+                    "set_product_submission_choice",
+                    {"proposal_id": pid, "expected_revision": 0, "choice": "declined"},
+                )
+            )
+            self.assertEqual(choice["submission"]["choice"], "declined")
+            checklist = payload(
+                await server.call_tool("prepare_public_food_submission", {"proposal_id": pid})
+            )
+            self.assertFalse(checklist["should_offer_submission"])
+            self.assertFalse(checklist["submitted"])
+            self.assertEqual(client.adds, 1)
