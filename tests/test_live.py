@@ -199,6 +199,7 @@ class PinnedClientTests(unittest.TestCase):
 
     def test_product_creation_with_real_pinned_request_helper(self):
         from copy import deepcopy
+
         from cronometer_assistant.products import ProductService
         from cronometer_assistant.store import Store
 

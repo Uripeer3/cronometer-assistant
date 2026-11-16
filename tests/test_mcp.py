@@ -136,11 +136,12 @@ class MCPTests(unittest.TestCase):
         asyncio.run(self.product_surface())
 
     async def product_surface(self):
+        from test_products import FakeClient
+
         from cronometer_assistant.live import ReadOnlyConnection
         from cronometer_assistant.products import ProductService
         from cronometer_assistant.read_only_server import create_read_only_server
         from cronometer_assistant.store import Store
-        from test_products import FakeClient
 
         with tempfile.TemporaryDirectory() as directory:
             client = FakeClient()
