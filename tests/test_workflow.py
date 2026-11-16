@@ -37,6 +37,24 @@ class ServiceFixture(unittest.TestCase):
 
 
 class ServiceTests(ServiceFixture):
+    def test_delete_unlogged_draft_persists_across_restart(self):
+        meal_id = self.ready()
+        result = self.service.delete_draft(meal_id, 1)
+        self.assertTrue(result["deleted"])
+        self.assertEqual(result["diary_entries_deleted"], 0)
+        restarted = MealService(Store(self.store.path))
+        with self.assertRaises(ValidationError):
+            restarted.review_meal(meal_id)
+
+    def test_stale_revision_and_logged_meal_cannot_be_deleted(self):
+        meal_id = self.ready()
+        with self.assertRaises(ValidationError):
+            self.service.delete_draft(meal_id, 0)
+        self.service.commit_meal(meal_id, 1)
+        with self.assertRaises(ValidationError):
+            self.service.delete_draft(meal_id, 1)
+        self.assertEqual(len(self.service.status(meal_id)["diary"]), 1)
+
     def test_demo_runs_without_credentials(self):
         result = run_demo(Path(self.temp.name) / "demo.sqlite")
         self.assertEqual(result["logging_state"], "committed")
@@ -162,6 +180,8 @@ class ReliabilityTests(ServiceFixture):
         meal_id = self.ready(service)
         first = service.commit_meal(meal_id, 1)
         self.assertEqual(first["operation"]["state"], "needs_reconciliation")
+        with self.assertRaises(ValidationError):
+            service.delete_draft(meal_id, 1)
         again = MealService(Store(self.store.path)).commit_meal(meal_id, 1)
         self.assertTrue(again["retry_blocked"])
         entries = service.diary.entries("2026-11-16")

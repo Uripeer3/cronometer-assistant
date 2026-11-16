@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install and run the official tunnel client for this repository's local DEMO server."""
+"""Run the official tunnel client for demo or read-only Cronometer food inspection."""
 
 import argparse
 import fcntl
@@ -12,6 +12,7 @@ import platform
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -24,6 +25,46 @@ RELEASE_API = "https://api.github.com/repos/openai/tunnel-client/releases/latest
 ASSET_PREFIX = "https://github.com/openai/tunnel-client/releases/download/"
 MAX_DOWNLOAD = 150 * 1024 * 1024
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def validate_key(key: str) -> str:
+    key = key.strip()
+    if not key or any(char.isspace() for char in key):
+        raise ValueError("Runtime API key is empty or contains whitespace")
+    return key
+
+
+def load_saved_key(path: Path) -> str | None:
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return None
+    with os.fdopen(fd) as source:
+        info = os.fstat(source.fileno())
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.getuid()
+            or stat.S_IMODE(info.st_mode) & 0o077
+        ):
+            raise ValueError("Saved runtime key must be a private regular file with mode 0600")
+        return validate_key(source.read(8192))
+
+
+def save_key(path: Path, key: str):
+    key = validate_key(key)
+    info = path.parent.stat()
+    if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o077:
+        raise ValueError("Runtime-key directory must be private with mode 0700")
+    with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as target:
+        temporary = Path(target.name)
+        try:
+            os.fchmod(target.fileno(), 0o600)
+            target.write(key + "\n")
+            target.flush()
+            os.fsync(target.fileno())
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
 
 
 def validate_tunnel_id(value: str) -> str:
@@ -99,16 +140,27 @@ def acquire_client(folder: Path) -> Path:
     return destination
 
 
-def launch_arguments(client: Path, tunnel_id: str, python: Path, database: Path) -> list[str]:
+def launch_arguments(
+    client: Path, tunnel_id: str, python: Path, database: Path, *, mode: str = "demo"
+) -> list[str]:
     validate_tunnel_id(tunnel_id)
+    if mode not in {"demo", "read-only"}:
+        raise ValueError("mode must be demo or read-only")
+    server_args = (
+        ["serve", "--db", str(database)]
+        if mode == "demo"
+        else [
+            "serve-read-only",
+            "--session",
+            str(database.parent / "cronometer-session/session.json"),
+        ]
+    )
     command = shlex.join(
         [
             str(python),
             "-m",
             "cronometer_assistant",
-            "serve",
-            "--db",
-            str(database),
+            *server_args,
         ]
     )
     return [
@@ -128,6 +180,12 @@ def launch_arguments(client: Path, tunnel_id: str, python: Path, database: Path)
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tunnel-id", required=True, type=validate_tunnel_id)
+    parser.add_argument("--mode", choices=["demo", "read-only"], default="demo")
+    parser.add_argument(
+        "--save-key",
+        action="store_true",
+        help="Save the entered runtime key privately for future launches (Git-ignored)",
+    )
     parser.add_argument(
         "--client-bin", type=Path, help="Use an already installed official tunnel-client binary"
     )
@@ -145,27 +203,38 @@ def main() -> int:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as error:
             raise ValueError("A tunnel launcher is already active for this checkout") from error
-        print("Installing the locked demo dependencies…", flush=True)
-        subprocess.run([uv, "sync", "--locked", "--extra", "mcp", "--no-dev"], cwd=ROOT, check=True)
+        print("Installing the locked dependencies…", flush=True)
+        extras = ["--extra", "live"] if args.mode == "read-only" else []
+        subprocess.run(
+            [uv, "sync", "--locked", "--extra", "mcp", *extras, "--no-dev"], cwd=ROOT, check=True
+        )
         client = args.client_bin.resolve() if args.client_bin else acquire_client(runtime)
         if not client.is_file() or not os.access(client, os.X_OK):
             raise ValueError("The official tunnel-client binary is missing or not executable")
         subprocess.run([str(client), "help", "quickstart"], check=True)
-        key = os.environ.get("CONTROL_PLANE_API_KEY", "")
+        key_path = runtime / "tunnel-api-key"
+        key = os.environ.get("CONTROL_PLANE_API_KEY", "") or load_saved_key(key_path)
         if not key:
             if not sys.stdin.isatty():
                 raise ValueError("Run this in your terminal for private API-key entry")
             key = getpass.getpass("Paste restricted runtime API key (hidden): ").strip()
-        if not key or any(char.isspace() for char in key):
-            raise ValueError("Runtime API key is empty or contains whitespace")
+        key = validate_key(key)
+        if args.save_key:
+            save_key(key_path, key)
+            print("Runtime key saved privately for future launches (Git-ignored).", flush=True)
         environment = dict(os.environ)
         environment["CONTROL_PLANE_API_KEY"] = key
         database = ROOT / "data" / "demo.sqlite"
         database.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        command = launch_arguments(client, args.tunnel_id, ROOT / ".venv/bin/python", database)
-        print("Starting DEMO tunnel. Keep this terminal open; Ctrl+C stops it.", flush=True)
+        command = launch_arguments(
+            client, args.tunnel_id, ROOT / ".venv/bin/python", database, mode=args.mode
+        )
         print(
-            "The key is passed through the process environment, not saved in this repository.",
+            f"Starting {args.mode.upper()} tunnel. Keep this terminal open; Ctrl+C stops it.",
+            flush=True,
+        )
+        print(
+            "The key is passed through the process environment, never command arguments.",
             flush=True,
         )
         print(
@@ -173,10 +242,10 @@ def main() -> int:
             flush=True,
         )
         print(
-            "Wait for readiness, then create the ChatGPT connection and test a draft tool.",
+            "Wait for readiness, then refresh the ChatGPT connection's available tools.",
             flush=True,
         )
-        # The runtime key is deliberately absent from command arguments and files.
+        # Persistence is opt-in; the runtime key is always absent from command arguments.
         return subprocess.run(command, cwd=ROOT, env=environment).returncode
 
 
@@ -184,7 +253,7 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except KeyboardInterrupt:
-        print("\nDemo tunnel stopped.", file=sys.stderr)
+        print("\nTunnel stopped.", file=sys.stderr)
         raise SystemExit(130) from None
     except (ValueError, OSError, urllib.error.URLError, subprocess.CalledProcessError) as error:
         # Do not include subprocess environments or authentication values in diagnostics.

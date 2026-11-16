@@ -73,3 +73,7 @@ class Store:
                 "SELECT payload FROM documents WHERE namespace=? ORDER BY key", (namespace,)
             ).fetchall()
         return [json.loads(row[0]) for row in rows]
+
+    def delete(self, namespace: str, key: str):
+        with self.connection() as db:
+            db.execute("DELETE FROM documents WHERE namespace=? AND key=?", (namespace, key))
