@@ -96,3 +96,15 @@ Older already-saved demo foods are not rewritten automatically. New proposals
 include label-convention metadata; recreate old pending proposals through the
 proposal tool instead of manually adding fields to an old object. The new optional
 tool parameter also requires refreshing ChatGPT's cached schemas before testing.
+
+A changed proposal cannot evade an outstanding uncertain creation of the same
+named product/barcode. Canonical nutrient/serving identity deduplicates equivalent
+label conventions; original label fields, units, basis and density are retained
+separately for audit. Creating a new formulation must wait until any uncertain
+previous attempt has been resolved.
+
+The laptop working folder was a source projection rather than a normal Git
+checkout. Once the host reconnects, establish a proper checkout and preserve
+ignored databases, session and runtime-key files when synchronizing. Do not
+assume git pull works in the old folder. GitHub and CI remain the source of
+reviewed code while the host is unavailable.

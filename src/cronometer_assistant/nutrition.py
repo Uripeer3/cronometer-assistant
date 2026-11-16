@@ -30,6 +30,7 @@ def normalize_label(
     """Validate model-extracted label fields; this function does not read images."""
     name = text(name, "product name")
     basis = number(basis_amount, "label basis", positive=True)
+    original_basis = basis
     if basis_unit == "ml":
         if density_g_per_ml is None:
             raise ValidationError("A per-ml label needs a known density before conversion to grams")
@@ -50,6 +51,8 @@ def normalize_label(
             raise ValidationError("Provide label carbohydrates and their basis, not net_carbs")
         if not isinstance(row, dict) or set(row) != {"amount", "unit"}:
             raise ValidationError("Each nutrient requires exactly amount and unit")
+        if not isinstance(row["unit"], str):
+            raise ValidationError("Nutrient unit must be text")
         unit = {"µg": "ug", "μg": "ug"}.get(row["unit"], row["unit"])
         amount = row["amount"]
         if amount is not None:
@@ -100,6 +103,9 @@ def normalize_label(
     return {
         "name": name,
         "basis_grams": basis,
+        "label_basis": {"amount": original_basis, "unit": basis_unit,
+                        "density_g_per_ml": density_g_per_ml},
+        "label_fields": {key: dict(row) for key, row in nutrients.items()},
         "conversion_notes": notes,
         "carbohydrate_basis": carbohydrate_basis,
         "label_nutrients_per_100g": label_values,

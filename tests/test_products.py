@@ -293,3 +293,36 @@ class ProductTests(unittest.TestCase):
             check_request("POST", "/api/v2/add_food", {"data": {"id": 0}})
         with self.assertRaises(LiveError):
             check_request("POST", "/api/v2/add_serving", {}, allow_product_creation=True)
+
+    def test_new_proposal_cannot_evade_an_uncertain_creation(self):
+        first = self.proposal()
+        altered = label_values()
+        altered["energy"]["amount"] = 321
+        second = self.proposal(altered)
+        self.client.timeout_after_create = True
+        self.service.create(first, True)
+        with self.assertRaises(ValidationError):
+            self.service.create(second, True)
+        with self.assertRaises(ValidationError):
+            self.proposal(altered)
+        self.assertEqual(self.client.adds, 1)
+
+    def test_same_canonical_profile_reuses_id_across_label_conventions(self):
+        first = self.proposal()
+        included = label_values()
+        included["carbs"]["amount"] = 38
+        second = self.service.prepare(
+            "Synthetic Brand, Cocoa", 100, "g", included,
+            carbohydrate_basis="includes_fiber", serving_grams=25,
+        )["product"]["proposal_id"]
+        self.assertEqual(first, second)
+
+    def test_original_label_basis_and_units_survive_normalization(self):
+        result = normalize_label(
+            "Synthetic liquid", 50, "ml", {"energy": {"amount": 418.4, "unit": "kJ"}},
+            density_g_per_ml=1.1,
+        )
+        self.assertEqual(result["label_basis"]["unit"], "ml")
+        self.assertEqual(result["label_basis"]["amount"], 50)
+        self.assertEqual(result["label_fields"]["energy"]["unit"], "kJ")
+        self.assertAlmostEqual(result["basis_grams"], 55)

@@ -257,6 +257,8 @@ class MealService:
         if set(proposal) != {
             "name",
             "basis_grams",
+            "label_basis",
+            "label_fields",
             "conversion_notes",
             "carbohydrate_basis",
             "label_nutrients_per_100g",

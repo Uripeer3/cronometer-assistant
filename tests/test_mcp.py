@@ -161,8 +161,12 @@ class MCPTests(unittest.TestCase):
                     "nutrients": {"protein": {"amount": 10, "unit": "g"}},
                 },
             )
-            # FastMCP returns content and structured data for dictionary tools.
-            data = result[1] if isinstance(result, tuple) else None
+            def payload(value):
+                if isinstance(value, tuple):
+                    return value[1]
+                return json.loads(value[0].text)
+
+            data = payload(result)
             self.assertTrue(data["ok"])
             pid = data["product"]["proposal_id"]
             blocked = await server.call_tool(
@@ -172,7 +176,7 @@ class MCPTests(unittest.TestCase):
                     "reviewed": False,
                 },
             )
-            self.assertFalse(blocked[1]["ok"])
+            self.assertFalse(payload(blocked)["ok"])
             self.assertEqual(client.adds, 0)
             created = await server.call_tool(
                 "create_verified_cronometer_food",
@@ -181,5 +185,5 @@ class MCPTests(unittest.TestCase):
                     "reviewed": True,
                 },
             )
-            self.assertTrue(created[1]["created"])
-            self.assertFalse(created[1]["real_diary_changed"])
+            self.assertTrue(payload(created)["created"])
+            self.assertFalse(payload(created)["real_diary_changed"])

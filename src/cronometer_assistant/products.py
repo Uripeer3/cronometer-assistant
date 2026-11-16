@@ -6,7 +6,7 @@ import math
 import re
 from copy import deepcopy
 
-from .models import ValidationError, number, text
+from .models import ValidationError, normalized, number, text
 from .nutrition import normalize_label
 from .store import Store
 
@@ -51,6 +51,19 @@ class ProductService:
             raise ValidationError("Unknown product proposal; prepare and review it first")
         return value
 
+    def _check_unresolved(self, product):
+        for other in self.store.values("product_proposals"):
+            if other["proposal_id"] == product["proposal_id"]:
+                continue
+            same_name = normalized(other["label"]["name"]) == normalized(product["label"]["name"])
+            same_barcode = product["barcode"] and product["barcode"] == other["barcode"]
+            if (same_name or same_barcode) and other["state"] in {
+                "sending", "uncertain", "needs_verification", "needs_reconciliation"
+            }:
+                raise ValidationError(
+                    "Resolve the existing uncertain creation first: " + other["proposal_id"]
+                )
+
     def prepare(
         self,
         name: str,
@@ -79,8 +92,17 @@ class ProductService:
             "serving_grams": number(serving_grams, "serving grams", positive=True),
             "barcode": barcode,
         }
-        digest = hashlib.sha256(json.dumps(proposal, sort_keys=True).encode()).hexdigest()
+        identity = {
+            "name": normalized(label["name"]),
+            "serving_grams": proposal["serving_grams"],
+            "barcode": barcode,
+            "nutrients": {
+                k: v for k, v in label["nutrients_per_100g"].items() if v["amount"] is not None
+            },
+        }
+        digest = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
         with self.store.locked():
+            self._check_unresolved({"proposal_id": digest, **proposal})
             existing = self.store.get("product_proposals", digest)
             if existing is None:
                 existing = {"proposal_id": digest, "state": "prepared", **proposal}
@@ -186,6 +208,7 @@ class ProductService:
             raise ValidationError("Review the prepared product before creating it in Cronometer")
         with self.store.locked():
             product = self._product(proposal_id)
+            self._check_unresolved(product)
             if product["state"] == "created":
                 return self.response(
                     product,
