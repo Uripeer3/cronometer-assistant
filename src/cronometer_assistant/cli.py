@@ -6,6 +6,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+from .models import ValidationError
 from .service import MealService
 from .store import Store
 
@@ -52,7 +53,8 @@ def run_demo(path: Path) -> dict:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "command", choices=["demo", "serve", "login", "check-cronometer", "serve-read-only"]
+        "command",
+        choices=["demo", "serve", "login", "check-cronometer", "serve-read-only", "serve-products"],
     )
     parser.add_argument("--db", type=Path, help="Persistent SQLite path (private runtime data)")
     parser.add_argument(
@@ -62,13 +64,17 @@ def main():
         help="Private local Cronometer session; never a password file",
     )
     args = parser.parse_args()
-    if args.command in {"login", "check-cronometer", "serve-read-only"}:
+    if args.command in {"login", "check-cronometer", "serve-read-only", "serve-products"}:
         from .live import LiveError, ReadOnlyConnection, create_client
 
         connection = None
         try:
             connection = ReadOnlyConnection(
-                create_client(args.session, interactive=args.command == "login")
+                create_client(
+                    args.session,
+                    interactive=args.command == "login",
+                    allow_product_creation=args.command == "serve-products",
+                )
             )
             if args.command == "login":
                 connection.client.login()
@@ -78,13 +84,19 @@ def main():
             else:
                 from .read_only_server import create_read_only_server
 
-                create_read_only_server(connection).run(transport="stdio")
-        except (LiveError, OSError):
-            # Never print upstream exceptions or request payloads to terminal/MCP output.
-            print(
-                "Connection unavailable. Check setup and run login in your terminal.",
-                file=sys.stderr,
-            )
+                products = None
+                if args.command == "serve-products":
+                    from .products import ProductService
+
+                    products = ProductService(
+                        Store(args.db or Path("data/products.sqlite")), connection.client
+                    )
+                create_read_only_server(connection, product_service=products).run(transport="stdio")
+        except (LiveError, ValidationError) as error:
+            print(str(error), file=sys.stderr)  # Only our scrubbed diagnostics.
+            raise SystemExit(1) from None
+        except (OSError, EOFError):
+            print("Connection unavailable. Check setup and run login locally.", file=sys.stderr)
             raise SystemExit(1) from None
         finally:
             if connection:

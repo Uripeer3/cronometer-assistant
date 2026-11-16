@@ -32,7 +32,7 @@ def normalized(value: str) -> str:
     return re.sub(r"[^\w\s%]", "", value).strip()
 
 
-UNITS = {"g", "mg", "ug", "kcal", "kJ"}
+UNITS = {"g", "mg", "ug", "kcal", "kJ", "IU"}
 CORE_UNITS = {
     "energy": "kcal",
     "protein": "g",
@@ -40,6 +40,11 @@ CORE_UNITS = {
     "fat": "g",
     "fiber": "g",
     "sodium": "mg",
+    "sugars": "g",
+    "sugar_alcohol": "g",
+    "saturated_fat": "g",
+    "trans_fat": "g",
+    "cholesterol": "mg",
 }
 
 

@@ -68,3 +68,13 @@ backends. Source-code mappings and food/measure fidelity remain unverified.
 
 Demo draft deletion is revision-checked and blocks any meal with a journal entry,
 including uncertain writes. It removes only the local draft, never diary entries.
+
+## Private-product milestone
+
+See [review and product mode](review-and-products.md). Product proposals and their
+creation journal are separate from demo meals and bound to one account. Never
+persist an upstream-mutated request: it may contain auth. The product service
+sends a deep copy and excludes internal payloads from tool results. HTTP creation
+is an explicit capability; ordinary read-only clients still reject add_food.
+Tests cover synthetic timeout/crash recovery, token non-persistence, read-back,
+account separation and the real pinned request helper with mocked HTTP.

@@ -196,3 +196,46 @@ class PinnedClientTests(unittest.TestCase):
         with self.assertRaises(LiveError):
             client._http.delete("/api/v3/user/1/diary-entries")
         self.assertEqual(self.requests, [])
+
+    def test_product_creation_with_real_pinned_request_helper(self):
+        from copy import deepcopy
+
+        from cronometer_assistant.products import ProductService
+        from cronometer_assistant.store import Store
+
+        SessionFile(self.path).write(1, "fake-token", "Asia/Jerusalem")
+        remote = {}
+
+        def handler(request):
+            payload = json.loads(request.content)
+            if request.url.path == "/api/v2/get_nutrients":
+                return self.httpx.Response(
+                    200, json={"nutrients": [{"id": 208, "name": "Energy", "unit": "kcal"}]}
+                )
+            if request.url.path == "/api/v2/add_food":
+                remote.update(deepcopy(payload["data"]))
+                remote["owner"] = 1
+                remote["id"] = 123
+                remote["measures"][0]["id"] = 456
+                self.assertEqual(payload["auth"]["token"], "fake-token")
+                return self.httpx.Response(200, json={"id": 123})
+            if request.url.path == "/api/v2/get_food":
+                return self.httpx.Response(200, json=remote)
+            raise AssertionError("Unexpected endpoint")
+
+        client = create_client(
+            self.path, allow_product_creation=True, transport=self.httpx.MockTransport(handler)
+        )
+        self.addCleanup(client._http.close)
+        service = ProductService(Store(Path(self.temp.name) / "products.sqlite"), client)
+        pid = service.prepare(
+            "Synthetic food", 100, "g", {"energy": {"amount": 200, "unit": "kcal"}}
+        )["product"]["proposal_id"]
+        result = service.create(pid, True)
+        self.assertTrue(result["created"])
+        self.assertNotIn("fake-token", json.dumps(service.store.get("product_proposals", pid)))
+        self.assertNotIn("fake-token", json.dumps(result))
+        with self.assertRaises(LiveError):
+            client._request("/api/v2/add_food", {"data": {"id": 123}})
+        with self.assertRaises(LiveError):
+            client._request("/api/v2/add_serving", {})
