@@ -26,6 +26,8 @@ uv run --locked --extra mcp cronometer-assistant serve --db data/demo.sqlite
 
 The transport is **local stdio**, using the official MCP Python SDK. See [assistant setup](docs/assistant-setup.md) for a local-client configuration and the phone/ChatGPT compatibility gate. A public URL, OAuth server, and remote deployment are deliberately not part of this milestone.
 
+To test it in ChatGPT through an OpenAI private tunnel, use the [tunnel setup guide](docs/tunnel-setup.md) and `python3 scripts/connect_demo.py --tunnel-id YOUR_TUNNEL_ID`. The launcher prompts for a restricted runtime key privately in your terminal.
+
 ## Implemented
 
 - Persistent drafts with revisions, consumption intent, and unresolved questions.

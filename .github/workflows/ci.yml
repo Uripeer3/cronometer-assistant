@@ -26,9 +26,25 @@ jobs:
       - name: Lint
         run: uv run --locked ruff check .
       - name: Format
-        run: uv run --locked ruff format --check .
+        run: uv run --locked ruff format --check --diff .
       - name: Domain and real MCP transport tests
         run: uv run --locked --extra mcp python -m unittest discover -s tests -v
       - name: CLI smoke test
         run: uv run --locked cronometer-assistant demo
+      - name: Official tunnel CLI compatibility
+        run: |
+          uv run --locked python - <<'PY'
+          import subprocess
+          import sys
+          import tempfile
+          from pathlib import Path
+          from scripts.connect_demo import acquire_client, launch_arguments
+          with tempfile.TemporaryDirectory() as folder:
+              root = Path(folder)
+              client = acquire_client(root)
+              subprocess.run([str(client), 'help', 'quickstart'], check=True)
+              command = launch_arguments(client, 'tunnel_' + 'a' * 32,
+                                         Path(sys.executable), root / 'demo.sqlite')
+              subprocess.run([*command, '--help'], check=True)
+          PY
 

@@ -1,0 +1,52 @@
+# Connect the demo through Secure MCP Tunnel
+
+The demo runs on your laptop. It needs an outbound connection to OpenAI and must stay running for ChatGPT to discover and use its tools. It does not access your real Cronometer diary.
+
+## One-time Platform setup
+
+1. In [Platform Tunnels](https://platform.openai.com/settings/organization/tunnels), create a tunnel associated with the ChatGPT workspace you will use.
+2. In [Runtime API keys](https://platform.openai.com/settings/organization/api-keys), create a **Restricted** key named `cronometer-demo-runtime` with **Tunnels Read + Use**. The key's principal also needs access to the tunnel. The client does not need an admin key or Manage permission.
+3. Keep the key private. Do not paste it into chat, GitHub, a shell command, or a configuration file.
+
+## Run from your normal terminal
+
+In this repository's checkout:
+
+```bash
+python3 scripts/connect_demo.py --tunnel-id tunnel_YOUR_COMPLETE_ID
+```
+
+The launcher installs locked demo dependencies with `uv`, downloads the current official OpenAI tunnel client for your machine, and verifies the archive against the release's SHA-256 digest. It stores the binary under ignored `.runtime/`. If you already downloaded the supported binary from the Platform Tunnels page, pass `--client-bin /absolute/path/tunnel-client` instead.
+
+It then asks for the restricted runtime key using a hidden terminal prompt. Paste the key there and press Enter. Nothing is echoed or written into the repository. The key is passed to the official client through its process environment; it is not a command-line argument. If `CONTROL_PLANE_API_KEY` is already present in that terminal's environment, it is reused instead of prompting.
+
+This is a foreground operator session. Keep the terminal open; Ctrl+C stops the client. Run only **one** client instance per tunnel ID: stdio initialization and subsequent calls must reach the same MCP child process. A local lock prevents two launchers from this checkout, but cannot detect another checkout or another machine using the same ID.
+
+## Verify before finishing the ChatGPT form
+
+The client writes its local health base URL to `data/tunnel-health.url`. Once it is running, use a second terminal:
+
+```bash
+python3 - <<'PY'
+from pathlib import Path
+import urllib.request
+base = Path('data/tunnel-health.url').read_text().strip().rstrip('/')
+with urllib.request.urlopen(base + '/readyz', timeout=5) as response:
+    print(response.status, response.read().decode())
+print('Local status page:', base + '/ui')
+PY
+```
+
+An HTTP 200 readiness response is a prerequisite, not proof that ChatGPT can call the tools. In ChatGPT's custom MCP form, select this tunnel and **No authentication** for this demo server. The tunnel still has workspace authorization and runtime-key authentication; the demo MCP application itself has no OAuth implementation.
+
+Finish creating/installing the connection. In a new conversation, select the plugin and ask it to create a demo meal draft. Verify that `begin_meal` is called and returns `mode=demo` with `real_diary_changed=false`. Then test a follow-up in Hebrew or English. Setup is complete only after a real tool call succeeds through ChatGPT.
+
+If the client cannot authenticate, check the key's Tunnels Read + Use permissions and the tunnel's workspace association. If downloads fail in an agent sandbox, run the launcher directly in your normal terminal; the initial development environment blocks PyPI downloads. A key is not needed until dependency and binary setup succeeds.
+
+## Sources
+
+- [Official tunnel onboarding](https://github.com/openai/tunnel-client/blob/master/docs/onboarding.md)
+- [Permissions and runtime keys](https://github.com/openai/tunnel-client/blob/master/docs/permissions.md)
+- [Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
+
+The launcher follows the public latest-release metadata rather than hardcoding a release URL. The Platform download is an alternative if your account requires a specifically supported build.
