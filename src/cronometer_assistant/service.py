@@ -15,8 +15,12 @@ GROUPS = {"breakfast", "lunch", "dinner", "snack"}
 
 class MealService:
     def __init__(
-        self, store: Store, *, catalog: Catalog | None = None,
-        diary: DiaryBackend | None = None, timezone: str = "Asia/Jerusalem",
+        self,
+        store: Store,
+        *,
+        catalog: Catalog | None = None,
+        diary: DiaryBackend | None = None,
+        timezone: str = "Asia/Jerusalem",
     ):
         self.store = store
         self.catalog = catalog or DemoCatalog(store)
@@ -36,7 +40,11 @@ class MealService:
         return meal
 
     def begin_meal(
-        self, title: str, *, day: str | None = None, meal_group: str = "lunch",
+        self,
+        title: str,
+        *,
+        day: str | None = None,
+        meal_group: str = "lunch",
         intent: str = "preparing",
     ) -> dict:
         title = text(title, "meal title")
@@ -51,17 +59,28 @@ class MealService:
         if intent not in {"preparing", "eaten"}:
             raise ValidationError("intent must be preparing or eaten")
         meal = {
-            "meal_id": uuid4().hex, "title": title, "day": day,
-            "timezone": str(self.timezone), "meal_group": meal_group, "intent": intent,
-            "revision": 0, "state": "collecting", "items": [], "pending_questions": [],
+            "meal_id": uuid4().hex,
+            "title": title,
+            "day": day,
+            "timezone": str(self.timezone),
+            "meal_group": meal_group,
+            "intent": intent,
+            "revision": 0,
+            "state": "collecting",
+            "items": [],
+            "pending_questions": [],
         }
         with self.store.locked():
             self.store.put("meals", meal["meal_id"], meal)
         return self.response(meal=meal)
 
     def resolve_food(
-        self, query: str, *, preparation: str | None = None,
-        packaged: bool = False, brand: str | None = None,
+        self,
+        query: str,
+        *,
+        preparation: str | None = None,
+        packaged: bool = False,
+        brand: str | None = None,
     ) -> dict:
         query = text(query, "query", 300)
         if preparation is not None and preparation not in {"raw", "cooked", "as_sold"}:
@@ -73,8 +92,12 @@ class MealService:
             candidates.append(self.catalog.get(remembered_id))
         return self.response(
             candidates=rank_foods(
-                candidates, query, preparation=preparation, packaged=packaged,
-                brand=brand, remembered_id=remembered_id,
+                candidates,
+                query,
+                preparation=preparation,
+                packaged=packaged,
+                brand=brand,
+                remembered_id=remembered_id,
             ),
             selection_required=True,
         )
@@ -87,8 +110,13 @@ class MealService:
         return self.response(alias=alias, food_id=food_id)
 
     def update_meal(
-        self, meal_id: str, *, expected_revision: int, items: list[dict],
-        pending_questions: list[str] | None = None, intent: str | None = None,
+        self,
+        meal_id: str,
+        *,
+        expected_revision: int,
+        items: list[dict],
+        pending_questions: list[str] | None = None,
+        intent: str | None = None,
     ) -> dict:
         if not isinstance(items, list) or len(items) > 100:
             raise ValidationError("items must be a complete list of at most 100 foods")
@@ -101,9 +129,11 @@ class MealService:
                 self.catalog.get(item.food_id)
         if pending_questions is not None and not isinstance(pending_questions, list):
             raise ValidationError("pending_questions must be a list")
-        questions = None if pending_questions is None else [
-            text(q, "pending question") for q in pending_questions
-        ]
+        questions = (
+            None
+            if pending_questions is None
+            else [text(q, "pending question") for q in pending_questions]
+        )
         if questions is not None and len(questions) > 20:
             raise ValidationError("Too many pending questions")
         if intent not in {None, "preparing", "eaten"}:
@@ -111,7 +141,9 @@ class MealService:
         with self.store.locked():
             meal = self._meal(meal_id)
             if meal["revision"] != expected_revision:
-                raise ValidationError("Draft changed; retrieve its current revision before updating")
+                raise ValidationError(
+                    "Draft changed; retrieve its current revision before updating"
+                )
             if self.store.get("operations", meal_id) is not None:
                 raise ValidationError("This draft already has a logging operation and is immutable")
             meal["items"] = [item.to_dict() for item in parsed]
@@ -125,8 +157,7 @@ class MealService:
         return self.response(meal=meal, review=review)
 
     def _review(self, meal: dict) -> dict:
-        questions = [{"reason": "assistant_flag", "question": q}
-                     for q in meal["pending_questions"]]
+        questions = [{"reason": "assistant_flag", "question": q} for q in meal["pending_questions"]]
         if not meal["items"]:
             questions.append({"reason": "empty", "question": "What did you prepare or eat?"})
         resolved = []
@@ -134,23 +165,49 @@ class MealService:
         for index, row in enumerate(meal["items"]):
             item = MealItem(**row)
             if not item.food_id:
-                questions.append({"item": index, "reason": "identity",
-                                  "question": f"Which food matches {item.description}?"})
+                questions.append(
+                    {
+                        "item": index,
+                        "reason": "identity",
+                        "question": f"Which food matches {item.description}?",
+                    }
+                )
                 continue
             food = self.catalog.get(item.food_id)
             if item.grams is None:
-                questions.append({"item": index, "reason": "quantity",
-                                  "question": f"How much {item.description}?"})
+                questions.append(
+                    {
+                        "item": index,
+                        "reason": "quantity",
+                        "question": f"How much {item.description}?",
+                    }
+                )
             # Do not reinterpret a weighed cooked portion as a dry/raw entry.
             if item.preparation != "unspecified" and food.preparation != item.preparation:
-                questions.append({"item": index, "reason": "preparation_mismatch",
-                                  "question": "Confirm a matching preparation or choose another food"})
+                questions.append(
+                    {
+                        "item": index,
+                        "reason": "preparation_mismatch",
+                        "question": "Confirm a matching preparation or choose another food",
+                    }
+                )
             elif item.preparation == "unspecified" and food.preparation in {"raw", "cooked"}:
-                questions.append({"item": index, "reason": "preparation",
-                                  "question": f"Was {item.description} weighed raw/dry or cooked?"})
+                questions.append(
+                    {
+                        "item": index,
+                        "reason": "preparation",
+                        "question": f"Was {item.description} weighed raw/dry or cooked?",
+                    }
+                )
             resolved.append((item, food))
-            entries.append({**item.to_dict(), "food_name": food.name, "source": food.source,
-                            "synthetic": food.synthetic})
+            entries.append(
+                {
+                    **item.to_dict(),
+                    "food_name": food.name,
+                    "source": food.source,
+                    "synthetic": food.synthetic,
+                }
+            )
         nutrients = summarize(resolved)
         unresolved = [row["description"] for row in meal["items"] if not row.get("food_id")]
         for nutrient in nutrients.values():
@@ -158,12 +215,16 @@ class MealService:
             if unresolved:
                 nutrient["complete"] = False
         return {
-            "revision": meal["revision"], "questions": questions,
-            "suggested_next_questions": questions[:2], "entries": entries, "nutrients": nutrients,
+            "revision": meal["revision"],
+            "questions": questions,
+            "suggested_next_questions": questions[:2],
+            "entries": entries,
+            "nutrients": nutrients,
             "ready_to_log": not questions and meal["intent"] == "eaten",
             "consumption_confirmation_needed": meal["intent"] != "eaten",
-            "estimated_items": [i for i, row in enumerate(meal["items"])
-                                if row["quantity_basis"] != "weighed"],
+            "estimated_items": [
+                i for i, row in enumerate(meal["items"]) if row["quantity_basis"] != "weighed"
+            ],
         }
 
     def review_meal(self, meal_id: str) -> dict:
@@ -179,21 +240,33 @@ class MealService:
         if not isinstance(self.catalog, DemoCatalog):
             raise ValidationError("Custom product saving is only implemented for the demo catalog")
         if set(proposal) != {
-            "name", "basis_grams", "conversion_notes", "nutrients_per_100g",
+            "name",
+            "basis_grams",
+            "conversion_notes",
+            "nutrients_per_100g",
             "missing_fields_are_unknown",
         }:
             raise ValidationError("Expected a validated label proposal")
         # Revalidate proposed values; never trust a round trip through the assistant.
         validated = normalize_label(
-            proposal["name"], 100, "g",
-            {key: {"amount": row["amount"], "unit": row["unit"]}
-             for key, row in proposal["nutrients_per_100g"].items()},
+            proposal["name"],
+            100,
+            "g",
+            {
+                key: {"amount": row["amount"], "unit": row["unit"]}
+                for key, row in proposal["nutrients_per_100g"].items()
+            },
         )
-        food = Food.from_dict({
-            "food_id": "demo-label:" + uuid4().hex, "name": validated["name"],
-            "source": "USER_LABEL", "preparation": "as_sold", "synthetic": False,
-            "nutrients_per_100g": validated["nutrients_per_100g"],
-        })
+        food = Food.from_dict(
+            {
+                "food_id": "demo-label:" + uuid4().hex,
+                "name": validated["name"],
+                "source": "USER_LABEL",
+                "preparation": "as_sold",
+                "synthetic": False,
+                "nutrients_per_100g": validated["nutrients_per_100g"],
+            }
+        )
         alias = text(alias, "alias", 200)
         with self.store.locked():
             self.store.put("foods", food.food_id, food.to_dict())
@@ -203,17 +276,21 @@ class MealService:
     @staticmethod
     def _matches(entry: DiaryEntry, item: dict, meal: dict) -> bool:
         return (
-            entry.food_id == item["food_id"] and abs(entry.grams - item["grams"]) < 0.000001
-            and entry.day == meal["day"] and entry.meal_group == meal["meal_group"]
+            entry.food_id == item["food_id"]
+            and abs(entry.grams - item["grams"]) < 0.000001
+            and entry.day == meal["day"]
+            and entry.meal_group == meal["meal_group"]
         )
 
     def _persist_operation(self, meal: dict, operation: dict, state: str):
         operation["state"] = state
         meal["state"] = state
-        self.store.put_many([
-            ("operations", meal["meal_id"], operation),
-            ("meals", meal["meal_id"], meal),
-        ])
+        self.store.put_many(
+            [
+                ("operations", meal["meal_id"], operation),
+                ("meals", meal["meal_id"], meal),
+            ]
+        )
 
     def commit_meal(self, meal_id: str, expected_revision: int) -> dict:
         with self.store.locked():
@@ -227,8 +304,10 @@ class MealService:
                 if not self._review(meal)["ready_to_log"]:
                     raise ValidationError("Resolve food questions and confirm consumption first")
                 operation = {
-                    "operation_id": uuid4().hex, "meal_id": meal_id,
-                    "revision": meal["revision"], "state": "writing",
+                    "operation_id": uuid4().hex,
+                    "meal_id": meal_id,
+                    "revision": meal["revision"],
+                    "state": "writing",
                     "steps": [{"item": row, "state": "pending"} for row in meal["items"]],
                 }
                 self._persist_operation(meal, operation, "writing")
@@ -251,8 +330,10 @@ class MealService:
                     self._persist_operation(meal, operation, "writing")
                     try:
                         entry = self.diary.add(
-                            food_id=step["item"]["food_id"], grams=step["item"]["grams"],
-                            day=meal["day"], meal_group=meal["meal_group"],
+                            food_id=step["item"]["food_id"],
+                            grams=step["item"]["grams"],
+                            day=meal["day"],
+                            meal_group=meal["meal_group"],
                         )
                     except Exception:
                         # Persist no exception text: it might include credentials or request data.
@@ -297,19 +378,24 @@ class MealService:
                         continue
                     if other.get("entry_id") == entry_id:
                         raise ValidationError("Entry is already assigned to a logging operation")
-            entry = next((e for e in self.diary.entries(meal["day"])
-                          if e.entry_id == entry_id), None)
+            entry = next(
+                (e for e in self.diary.entries(meal["day"]) if e.entry_id == entry_id), None
+            )
             if entry is None or not self._matches(entry, step["item"], meal):
                 raise ValidationError("Entry does not match this item, amount, date, and group")
             step["entry_id"], step["state"] = entry_id, "verified"
-            state = "committed" if all(s["state"] == "verified" for s in operation["steps"]) \
+            state = (
+                "committed"
+                if all(s["state"] == "verified" for s in operation["steps"])
                 else "writing"
+            )
             self._persist_operation(meal, operation, state)
         return self.response(operation=operation)
 
     def status(self, meal_id: str) -> dict:
         meal = self._meal(meal_id)
         return self.response(
-            meal=meal, operation=self.store.get("operations", meal_id),
+            meal=meal,
+            operation=self.store.get("operations", meal_id),
             diary=[entry.to_dict() for entry in self.diary.entries(meal["day"])],
         )

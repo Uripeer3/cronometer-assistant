@@ -26,8 +26,6 @@ uv run --locked --extra mcp cronometer-assistant serve --db data/demo.sqlite
 
 The transport is **local stdio**, using the official MCP Python SDK. See [assistant setup](docs/assistant-setup.md) for a local-client configuration and the phone/ChatGPT compatibility gate. A public URL, OAuth server, and remote deployment are deliberately not part of this milestone.
 
-If the initial branch does not yet contain `uv.lock`, dependency bootstrapping is still in progress. Use `uv sync --extra mcp --group dev` to generate it; subsequent CI and development must use the committed lockfile.
-
 ## Implemented
 
 - Persistent drafts with revisions, consumption intent, and unresolved questions.

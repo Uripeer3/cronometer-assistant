@@ -15,7 +15,9 @@ def number(value: object, name: str, *, positive: bool = False) -> float:
         raise ValidationError(f"{name} must be a number")
     result = float(value)
     if not math.isfinite(result) or result < 0 or (positive and result == 0):
-        raise ValidationError(f"{name} must be finite and {'positive' if positive else 'nonnegative'}")
+        raise ValidationError(
+            f"{name} must be finite and {'positive' if positive else 'nonnegative'}"
+        )
     return result
 
 
@@ -32,8 +34,12 @@ def normalized(value: str) -> str:
 
 UNITS = {"g", "mg", "ug", "kcal", "kJ"}
 CORE_UNITS = {
-    "energy": "kcal", "protein": "g", "carbs": "g", "fat": "g",
-    "fiber": "g", "sodium": "mg",
+    "energy": "kcal",
+    "protein": "g",
+    "carbs": "g",
+    "fat": "g",
+    "fiber": "g",
+    "sodium": "mg",
 }
 
 

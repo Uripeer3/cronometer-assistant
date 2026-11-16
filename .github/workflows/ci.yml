@@ -21,16 +21,8 @@ jobs:
           version: "0.12.3"
           python-version: "3.13"
           enable-cache: true
-      - name: Bootstrap dependency lock
-        if: ${{ hashFiles('uv.lock') == '' }}
-        run: uv lock
       - name: Install locked dependencies
         run: uv sync --locked --extra mcp --group dev
-      - name: Bootstrap formatting
-        if: ${{ hashFiles('uv.lock') != '' }}
-        run: |
-          uv run --locked ruff check --fix .
-          uv run --locked ruff format .
       - name: Lint
         run: uv run --locked ruff check .
       - name: Format
@@ -39,18 +31,4 @@ jobs:
         run: uv run --locked --extra mcp python -m unittest discover -s tests -v
       - name: CLI smoke test
         run: uv run --locked cronometer-assistant demo
-      - name: Export bootstrap files
-        if: always()
-        run: |
-          python - <<'PY'
-          import base64, json
-          from pathlib import Path
-          files = list(Path("src").rglob("*.py")) + list(Path("tests").rglob("*.py"))
-          if Path("uv.lock").exists():
-              files.append(Path("uv.lock"))
-          payload = json.dumps({str(p): p.read_text() for p in files}, ensure_ascii=False)
-          encoded = base64.b64encode(payload.encode()).decode()
-          for start in range(0, len(encoded), 3000):
-              print("BOOTSTRAP_CHUNK:" + encoded[start:start+3000])
-          PY
 

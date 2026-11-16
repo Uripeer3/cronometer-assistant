@@ -14,8 +14,12 @@ from cronometer_assistant.store import Store
 
 
 def rice(grams=150, preparation="cooked"):
-    return {"description": "אורז", "food_id": "demo:rice-cooked", "grams": grams,
-            "preparation": preparation}
+    return {
+        "description": "אורז",
+        "food_id": "demo:rice-cooked",
+        "grams": grams,
+        "preparation": preparation,
+    }
 
 
 class ServiceFixture(unittest.TestCase):
@@ -60,11 +64,13 @@ class ServiceTests(ServiceFixture):
 
     def test_unanswered_questions_survive_partial_update(self):
         meal_id = self.ready()
-        self.service.update_meal(meal_id, expected_revision=1, items=[rice()],
-                                 pending_questions=["How much oil?"])
+        self.service.update_meal(
+            meal_id, expected_revision=1, items=[rice()], pending_questions=["How much oil?"]
+        )
         self.service.update_meal(meal_id, expected_revision=2, items=[rice(170)])
-        self.assertEqual(self.service.review_meal(meal_id)["meal"]["pending_questions"],
-                         ["How much oil?"])
+        self.assertEqual(
+            self.service.review_meal(meal_id)["meal"]["pending_questions"], ["How much oil?"]
+        )
 
     def test_revision_prevents_stale_commit(self):
         meal_id = self.ready()
@@ -113,13 +119,16 @@ class ServiceTests(ServiceFixture):
 
     def test_label_saved_once_can_be_reused(self):
         proposal = self.service.propose_label(
-            name="מוצר לבדיקה", basis_amount=100, basis_unit="g",
+            name="מוצר לבדיקה",
+            basis_amount=100,
+            basis_unit="g",
             nutrients={"חלבון": {"amount": 12, "unit": "g"}},
         )["proposal"]
         saved = self.service.save_label_product(proposal, "המוצר שלי", reviewed=True)
         food_id = saved["food"]["food_id"]
-        self.assertEqual(self.service.resolve_food("המוצר שלי")["candidates"][0]["food_id"],
-                         food_id)
+        self.assertEqual(
+            self.service.resolve_food("המוצר שלי")["candidates"][0]["food_id"], food_id
+        )
         self.assertNotIn("sodium", self.service.catalog.get(food_id).nutrients_per_100g)
         with self.assertRaises(ValidationError):
             self.service.save_label_product(proposal, "other", reviewed=False)
@@ -160,6 +169,40 @@ class ReliabilityTests(ServiceFixture):
         service.reconcile_entry(meal_id, 0, entries[0].entry_id)
         self.assertTrue(service.commit_meal(meal_id, 1)["already_logged"])
 
+    def test_process_crash_leaves_a_durable_attempt_marker(self):
+        class SimulatedCrash(BaseException):
+            pass
+
+        class CrashDiary(DemoDiary):
+            def add(self, **kwargs):
+                super().add(**kwargs)
+                raise SimulatedCrash
+
+        service = self.service_with(CrashDiary)
+        meal_id = self.ready(service)
+        with self.assertRaises(SimulatedCrash):
+            service.commit_meal(meal_id, 1)
+        restarted = MealService(Store(self.store.path))
+        result = restarted.commit_meal(meal_id, 1)
+        self.assertTrue(result["retry_blocked"])
+        self.assertEqual(len(restarted.diary.entries("2026-11-16")), 1)
+
+    def test_reconciliation_cannot_claim_an_older_matching_meal(self):
+        previous_id = self.ready()
+        self.service.commit_meal(previous_id, 1)
+        older = self.service.diary.entries("2026-11-16")[0]
+
+        class TimeoutDiary(DemoDiary):
+            def add(self, **kwargs):
+                super().add(**kwargs)
+                raise TimeoutError
+
+        service = self.service_with(TimeoutDiary)
+        meal_id = self.ready(service)
+        service.commit_meal(meal_id, 1)
+        with self.assertRaises(ValidationError):
+            service.reconcile_entry(meal_id, 0, older.entry_id)
+
     def test_verification_failure_does_not_repeat_add(self):
         class VerifyFailure(DemoDiary):
             count = 0
@@ -172,8 +215,9 @@ class ReliabilityTests(ServiceFixture):
 
         service = self.service_with(VerifyFailure)
         meal_id = self.ready(service)
-        self.assertEqual(service.commit_meal(meal_id, 1)["operation"]["state"],
-                         "needs_verification")
+        self.assertEqual(
+            service.commit_meal(meal_id, 1)["operation"]["state"], "needs_verification"
+        )
         restarted = MealService(Store(self.store.path))
         self.assertEqual(restarted.commit_meal(meal_id, 1)["operation"]["state"], "committed")
         self.assertEqual(len(restarted.diary.entries("2026-11-16")), 1)
@@ -203,8 +247,9 @@ class ReliabilityTests(ServiceFixture):
         service = self.service_with(SecondTimeout)
         meal_id = self.ready(service, [rice(), {**rice(100), "description": "second"}])
         result = service.commit_meal(meal_id, 1)
-        self.assertEqual([s["state"] for s in result["operation"]["steps"]],
-                         ["verified", "uncertain"])
+        self.assertEqual(
+            [s["state"] for s in result["operation"]["steps"]], ["verified", "uncertain"]
+        )
         self.assertTrue(service.commit_meal(meal_id, 1)["retry_blocked"])
         self.assertEqual(len(service.diary.entries("2026-11-16")), 2)
 
@@ -225,11 +270,16 @@ class NutritionTests(unittest.TestCase):
         self.assertFalse(totals["protein"]["complete"])
 
     def test_label_basis_energy_and_mass_units(self):
-        label = normalize_label("test", 40, "g", {
-            "energy": {"amount": 418.4, "unit": "kJ"},
-            "protein": {"amount": 4000, "unit": "mg"},
-            "sodium": {"amount": None, "unit": "mg"},
-        })
+        label = normalize_label(
+            "test",
+            40,
+            "g",
+            {
+                "energy": {"amount": 418.4, "unit": "kJ"},
+                "protein": {"amount": 4000, "unit": "mg"},
+                "sodium": {"amount": None, "unit": "mg"},
+            },
+        )
         values = label["nutrients_per_100g"]
         self.assertAlmostEqual(values["energy"]["amount"], 250)
         self.assertEqual(values["protein"]["amount"], 10)
@@ -245,10 +295,15 @@ class NutritionTests(unittest.TestCase):
 
     def test_salt_sodium_conflict_is_not_silently_resolved(self):
         with self.assertRaises(ValidationError):
-            normalize_label("test", 100, "g", {
-                "salt": {"amount": 1, "unit": "g"},
-                "sodium": {"amount": 400, "unit": "mg"},
-            })
+            normalize_label(
+                "test",
+                100,
+                "g",
+                {
+                    "salt": {"amount": 1, "unit": "g"},
+                    "sodium": {"amount": 400, "unit": "mg"},
+                },
+            )
         value = normalize_label("test", 100, "g", {"salt": {"amount": 1, "unit": "g"}})
         self.assertEqual(value["nutrients_per_100g"]["sodium"]["amount"], 400)
 
@@ -276,8 +331,9 @@ class NutritionTests(unittest.TestCase):
     def test_preparation_mismatch_is_filtered(self):
         raw = Food("1", "rice", "NCCDB", {}, preparation="raw")
         cooked = Food("2", "rice", "USDA", {}, preparation="cooked")
-        self.assertEqual([x["food_id"] for x in rank_foods([raw, cooked], "rice",
-                                                         preparation="cooked")], ["2"])
+        self.assertEqual(
+            [x["food_id"] for x in rank_foods([raw, cooked], "rice", preparation="cooked")], ["2"]
+        )
 
 
 class AdapterTests(unittest.TestCase):
@@ -287,8 +343,12 @@ class AdapterTests(unittest.TestCase):
                 return {203: {"unit": "g"}, 307: {"unit": "mg"}}
 
             def get_food(self, fid):
-                return {"id": fid, "name": "food", "source": 99,
-                        "nutrients": [{"id": 203, "amount": None}, {"id": 307, "amount": 0}]}
+                return {
+                    "id": fid,
+                    "name": "food",
+                    "source": 99,
+                    "nutrients": [{"id": 203, "amount": None}, {"id": 307, "amount": 0}],
+                }
 
         food = CronometerReadOnlyCatalog(Client()).get("crono:123")
         self.assertEqual(food.source, "UNVERIFIED:99")

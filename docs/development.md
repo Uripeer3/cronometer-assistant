@@ -49,7 +49,7 @@ The upstream connector is an optional dependency pinned to a commit. Our read-on
 
 Use an update PR to change the upstream commit or SDK version and regenerate `uv.lock`. Review protocol and authentication changes; run adapter fixtures and controlled live compatibility checks before deployment. If a connector patch is needed, maintain a narrow fork and point the pin to that patch. No changes have been sent upstream.
 
-The initial environment cannot reach PyPI, so the first CI run may generate a lockfile and emit it as a base64 bootstrap record. Retrieve it, commit it, and remove the bootstrap step; normal CI must check the existing lockfile. No credential or private diary data is included in that record.
+The committed `uv.lock` was resolved in GitHub Actions because the initial local environment could not reach PyPI. Normal CI checks the lockfile and source formatting without rewriting either. Regenerate the lockfile deliberately in dependency-update PRs.
 
 ## Runtime data and deployment
 

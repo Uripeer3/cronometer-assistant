@@ -29,8 +29,13 @@ class MCPTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             params = StdioServerParameters(
                 command=sys.executable,
-                args=["-m", "cronometer_assistant", "serve", "--db",
-                      str(Path(directory) / "test.sqlite")],
+                args=[
+                    "-m",
+                    "cronometer_assistant",
+                    "serve",
+                    "--db",
+                    str(Path(directory) / "test.sqlite"),
+                ],
                 env={**os.environ},
             )
             async with stdio_client(params) as (read, write):
@@ -40,15 +45,33 @@ class MCPTests(unittest.TestCase):
                     names = {t.name for t in tools.tools}
                     self.assertIn("commit_meal", names)
                     self.assertIn("propose_product_from_label", names)
-                    created = payload(await session.call_tool("begin_meal", {
-                        "title": "ארוחה לבדיקה", "intent": "eaten",
-                    }))
+                    created = payload(
+                        await session.call_tool(
+                            "begin_meal",
+                            {
+                                "title": "ארוחה לבדיקה",
+                                "intent": "eaten",
+                            },
+                        )
+                    )
                     meal_id = created["meal"]["meal_id"]
-                    updated = payload(await session.call_tool("update_meal_draft", {
-                        "meal_id": meal_id, "expected_revision": 0,
-                        "items": [{"description": "אורז", "food_id": "demo:rice-cooked",
-                                   "grams": 150, "preparation": "cooked"}],
-                    }))
+                    updated = payload(
+                        await session.call_tool(
+                            "update_meal_draft",
+                            {
+                                "meal_id": meal_id,
+                                "expected_revision": 0,
+                                "items": [
+                                    {
+                                        "description": "אורז",
+                                        "food_id": "demo:rice-cooked",
+                                        "grams": 150,
+                                        "preparation": "cooked",
+                                    }
+                                ],
+                            },
+                        )
+                    )
                     self.assertTrue(updated["review"]["ready_to_log"])
                     args = {"meal_id": meal_id, "expected_revision": 1}
                     committed = payload(await session.call_tool("commit_meal", args))

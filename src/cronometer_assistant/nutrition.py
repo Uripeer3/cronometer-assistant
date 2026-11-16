@@ -3,14 +3,22 @@
 from .models import CORE_UNITS, Food, MealItem, Nutrient, ValidationError, number, text
 
 LABEL_NAMES = {
-    "חלבון": "protein", "פחמימות": "carbs", "שומנים": "fat", "נתרן": "sodium",
-    "סיבים תזונתיים": "fiber", "אנרגיה": "energy", "carbohydrates": "carbs",
+    "חלבון": "protein",
+    "פחמימות": "carbs",
+    "שומנים": "fat",
+    "נתרן": "sodium",
+    "סיבים תזונתיים": "fiber",
+    "אנרגיה": "energy",
+    "carbohydrates": "carbs",
     "calories": "energy",
 }
 
 
 def normalize_label(
-    name: str, basis_amount: float, basis_unit: str, nutrients: dict,
+    name: str,
+    basis_amount: float,
+    basis_unit: str,
+    nutrients: dict,
     density_g_per_ml: float | None = None,
 ) -> dict:
     """Validate model-extracted label fields; this function does not read images."""
@@ -57,11 +65,11 @@ def normalize_label(
             unit = target
         if key in result:
             raise ValidationError(f"Multiple label fields map to {key}; resolve them explicitly")
-        result[key] = Nutrient(
-            None if amount is None else amount * 100 / basis, unit, "label"
-        )
+        result[key] = Nutrient(None if amount is None else amount * 100 / basis, unit, "label")
     return {
-        "name": name, "basis_grams": basis, "conversion_notes": notes,
+        "name": name,
+        "basis_grams": basis,
+        "conversion_notes": notes,
         "nutrients_per_100g": {
             key: {"amount": n.amount, "unit": n.unit, "provenance": n.provenance}
             for key, n in result.items()
@@ -92,7 +100,8 @@ def summarize(items: list[tuple[MealItem, Food]]) -> dict:
             known += 1
         result[key] = {
             "known_amount": round(total, 6) if known else None,
-            "unit": unit, "complete": bool(items) and not missing,
+            "unit": unit,
+            "complete": bool(items) and not missing,
             "missing_from": missing,
         }
     return result

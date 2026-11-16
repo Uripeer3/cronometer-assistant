@@ -56,9 +56,10 @@ class Store:
         self.put_many([(namespace, key, value)])
 
     def put_many(self, documents: list[tuple[str, str, dict]]):
-        rows = [(namespace, key,
-                 json.dumps(value, ensure_ascii=False, allow_nan=False, sort_keys=True))
-                for namespace, key, value in documents]
+        rows = [
+            (namespace, key, json.dumps(value, ensure_ascii=False, allow_nan=False, sort_keys=True))
+            for namespace, key, value in documents
+        ]
         with self.connection() as db:
             db.executemany(
                 "INSERT INTO documents VALUES (?, ?, ?) "

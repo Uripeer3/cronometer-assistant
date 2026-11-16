@@ -40,29 +40,42 @@ def create_server(service: MealService):
             return {"ok": False, "mode": "demo", "error": str(error)}
 
     @mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False})
-    def begin_meal(title: str, day: str | None = None, meal_group: str = "lunch",
-                   intent: str = "preparing") -> dict:
+    def begin_meal(
+        title: str, day: str | None = None, meal_group: str = "lunch", intent: str = "preparing"
+    ) -> dict:
         """Create a persistent demo draft. Set eaten only after actual consumption."""
         return call(service.begin_meal, title, day=day, meal_group=meal_group, intent=intent)
 
     @mcp.tool(annotations={"readOnlyHint": True})
-    def resolve_food(query: str, preparation: str | None = None, packaged: bool = False,
-                     brand: str | None = None) -> dict:
+    def resolve_food(
+        query: str, preparation: str | None = None, packaged: bool = False, brand: str | None = None
+    ) -> dict:
         """Search/rank foods. Prefer exact products or suitable detailed generic entries."""
-        return call(service.resolve_food, query, preparation=preparation,
-                    packaged=packaged, brand=brand)
+        return call(
+            service.resolve_food, query, preparation=preparation, packaged=packaged, brand=brand
+        )
 
     @mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False})
-    def update_meal_draft(meal_id: str, expected_revision: int, items: list[dict],
-                          pending_questions: list[str] | None = None,
-                          intent: str | None = None) -> dict:
+    def update_meal_draft(
+        meal_id: str,
+        expected_revision: int,
+        items: list[dict],
+        pending_questions: list[str] | None = None,
+        intent: str | None = None,
+    ) -> dict:
         """Replace all draft items; include description, food_id, grams, preparation.
 
         Use quantity_basis=estimated or user_default plus assumption when applicable.
         Keep unanswered pending_questions. Set intent=eaten after consumption.
         """
-        return call(service.update_meal, meal_id, expected_revision=expected_revision,
-                    items=items, pending_questions=pending_questions, intent=intent)
+        return call(
+            service.update_meal,
+            meal_id,
+            expected_revision=expected_revision,
+            items=items,
+            pending_questions=pending_questions,
+            intent=intent,
+        )
 
     @mcp.tool(annotations={"readOnlyHint": True})
     def get_meal_review(meal_id: str) -> dict:
@@ -75,17 +88,26 @@ def create_server(service: MealService):
         return call(service.remember_product, alias, food_id)
 
     @mcp.tool(annotations={"readOnlyHint": True})
-    def propose_product_from_label(name: str, basis_amount: float, basis_unit: str,
-                                   nutrients: dict,
-                                   density_g_per_ml: float | None = None) -> dict:
+    def propose_product_from_label(
+        name: str,
+        basis_amount: float,
+        basis_unit: str,
+        nutrients: dict,
+        density_g_per_ml: float | None = None,
+    ) -> dict:
         """Validate photo-extracted label fields; each nutrient has amount and unit.
 
         basis_unit is g or ml. A per-ml label needs a supported density to convert
         to grams. Absent values stay unknown. Does not read images or save food.
         """
-        return call(service.propose_label, name=name, basis_amount=basis_amount,
-                    basis_unit=basis_unit, nutrients=nutrients,
-                    density_g_per_ml=density_g_per_ml)
+        return call(
+            service.propose_label,
+            name=name,
+            basis_amount=basis_amount,
+            basis_unit=basis_unit,
+            nutrients=nutrients,
+            density_g_per_ml=density_g_per_ml,
+        )
 
     @mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False})
     def save_verified_product(proposal: dict, alias: str, reviewed: bool) -> dict:
