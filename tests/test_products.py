@@ -133,6 +133,7 @@ class LabelConventionTests(unittest.TestCase):
             "nutrients": [
                 {"id": 324, "amount": 80},
                 {"id": -205, "amount": 99},
+                {"id": 10007, "amount": 6},
                 {"id": 999, "amount": 3},
                 {"id": 307, "amount": 0},
             ],
@@ -143,6 +144,7 @@ class LabelConventionTests(unittest.TestCase):
         self.assertNotIn("cronometer_-205", food.nutrients_per_100g)
         self.assertNotIn("cronometer_999", food.nutrients_per_100g)
         self.assertEqual(food.nutrients_per_100g["sodium"].amount, 0)
+        self.assertEqual(food.nutrients_per_100g["sugar_alcohol"].amount, 6)
 
     def test_local_label_save_reuses_id_and_does_not_double_add_fiber(self):
         with tempfile.TemporaryDirectory() as directory:

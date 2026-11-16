@@ -195,6 +195,11 @@ class CronometerReadOnlyCatalog:
             204: "fat",
             291: "fiber",
             307: "sodium",
+            269: "sugars",
+            10007: "sugar_alcohol",
+            606: "saturated_fat",
+            605: "trans_fat",
+            601: "cholesterol",
         }
         for row in raw.get("nutrients", []):
             if not isinstance(row, dict) or type(row.get("id")) is not int or row["id"] <= 0:

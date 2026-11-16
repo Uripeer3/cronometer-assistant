@@ -29,6 +29,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def validate_key(key: str) -> str:
     key = key.strip()
+    if len(key) > 8192:
+        raise ValueError("Runtime API key exceeds the size limit")
     if not key or any(char.isspace() for char in key):
         raise ValueError("Runtime API key is empty or contains whitespace")
     return key

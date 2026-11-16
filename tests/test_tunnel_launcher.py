@@ -30,7 +30,8 @@ class TunnelLauncherTests(unittest.TestCase):
     def test_oversized_saved_key_is_rejected_without_echo(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "key"
-            launcher.save_key(path, "a" * 8193)
+            path.write_text("a" * 8193)
+            path.chmod(0o600)
             with self.assertRaises(ValueError) as error:
                 launcher.load_saved_key(path)
             self.assertNotIn("a" * 100, str(error.exception))
@@ -59,7 +60,7 @@ class TunnelLauncherTests(unittest.TestCase):
     def test_invalid_key_is_never_saved(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "runtime-key"
-            for value in ("", "two words", "one\ntwo"):
+            for value in ("", "two words", "one\ntwo", "a" * 8193):
                 with self.assertRaises(ValueError):
                     launcher.save_key(path, value)
             self.assertFalse(path.exists())
