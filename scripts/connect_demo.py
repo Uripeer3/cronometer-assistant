@@ -43,8 +43,7 @@ def read_public_url(url: str, maximum: int) -> bytes:
 
 def choose_asset(release: dict, system: str, machine: str) -> dict:
     os_name = {"Linux": "linux", "Darwin": "darwin"}.get(system)
-    arch = {"x86_64": "amd64", "AMD64": "amd64", "aarch64": "arm64",
-            "arm64": "arm64"}.get(machine)
+    arch = {"x86_64": "amd64", "AMD64": "amd64", "aarch64": "arm64", "arm64": "arm64"}.get(machine)
     if not os_name or not arch:
         raise ValueError("This launcher supports Linux/macOS on x86_64 or ARM64")
     tag = release.get("tag_name", "")
@@ -66,8 +65,11 @@ def install_archive(payload: bytes, digest: str, destination: Path):
     if "sha256:" + hashlib.sha256(payload).hexdigest() != digest:
         raise ValueError("Tunnel-client archive checksum does not match the official metadata")
     with zipfile.ZipFile(io.BytesIO(payload)) as archive:
-        members = [m for m in archive.infolist()
-                   if not m.is_dir() and m.filename.rsplit("/", 1)[-1] == "tunnel-client"]
+        members = [
+            m
+            for m in archive.infolist()
+            if not m.is_dir() and m.filename.rsplit("/", 1)[-1] == "tunnel-client"
+        ]
         if len(members) != 1 or members[0].file_size > MAX_DOWNLOAD:
             raise ValueError("Unexpected tunnel-client archive contents")
         executable = archive.read(members[0])
@@ -99,22 +101,36 @@ def acquire_client(folder: Path) -> Path:
 
 def launch_arguments(client: Path, tunnel_id: str, python: Path, database: Path) -> list[str]:
     validate_tunnel_id(tunnel_id)
-    command = shlex.join([
-        str(python), "-m", "cronometer_assistant", "serve", "--db", str(database),
-    ])
+    command = shlex.join(
+        [
+            str(python),
+            "-m",
+            "cronometer_assistant",
+            "serve",
+            "--db",
+            str(database),
+        ]
+    )
     return [
-        str(client), "run", "--control-plane.tunnel-id", tunnel_id,
-        "--mcp.command", command,
-        "--health.listen-addr", "127.0.0.1:0",
-        "--health.url-file", str(database.parent / "tunnel-health.url"),
+        str(client),
+        "run",
+        "--control-plane.tunnel-id",
+        tunnel_id,
+        "--mcp.command",
+        command,
+        "--health.listen-addr",
+        "127.0.0.1:0",
+        "--health.url-file",
+        str(database.parent / "tunnel-health.url"),
     ]
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tunnel-id", required=True, type=validate_tunnel_id)
-    parser.add_argument("--client-bin", type=Path,
-                        help="Use an already installed official tunnel-client binary")
+    parser.add_argument(
+        "--client-bin", type=Path, help="Use an already installed official tunnel-client binary"
+    )
     args = parser.parse_args()
     os.umask(0o077)
     uv = shutil.which("uv")
@@ -130,8 +146,7 @@ def main() -> int:
         except BlockingIOError as error:
             raise ValueError("A tunnel launcher is already active for this checkout") from error
         print("Installing the locked demo dependencies…", flush=True)
-        subprocess.run([uv, "sync", "--locked", "--extra", "mcp", "--no-dev"],
-                       cwd=ROOT, check=True)
+        subprocess.run([uv, "sync", "--locked", "--extra", "mcp", "--no-dev"], cwd=ROOT, check=True)
         client = args.client_bin.resolve() if args.client_bin else acquire_client(runtime)
         if not client.is_file() or not os.access(client, os.X_OK):
             raise ValueError("The official tunnel-client binary is missing or not executable")
@@ -149,12 +164,18 @@ def main() -> int:
         database.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         command = launch_arguments(client, args.tunnel_id, ROOT / ".venv/bin/python", database)
         print("Starting DEMO tunnel. Keep this terminal open; Ctrl+C stops it.", flush=True)
-        print("The key is passed through the process environment, not saved in this repository.",
-              flush=True)
-        print(f"Local health/UI URL will be written to {database.parent / 'tunnel-health.url'}.",
-              flush=True)
-        print("Wait for readiness, then create the ChatGPT connection and test a draft tool.",
-              flush=True)
+        print(
+            "The key is passed through the process environment, not saved in this repository.",
+            flush=True,
+        )
+        print(
+            f"Local health/UI URL will be written to {database.parent / 'tunnel-health.url'}.",
+            flush=True,
+        )
+        print(
+            "Wait for readiness, then create the ChatGPT connection and test a draft tool.",
+            flush=True,
+        )
         # The runtime key is deliberately absent from command arguments and files.
         return subprocess.run(command, cwd=ROOT, env=environment).returncode
 
