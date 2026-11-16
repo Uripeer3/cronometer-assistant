@@ -20,6 +20,10 @@ def create_read_only_server(connection: ReadOnlyConnection, *, product_service=N
                 "name; search first and never silently substitute another flavour. Establish whether "
                 "label carbs include fiber; both supported conventions include polyols. "
                 "Preserve sugar alcohols separately. Energy remains the stated label value. "
+                "Select category_id from a verified food of the same category, never guess IDs. "
+                "An explicit 0 means uncategorized. Excluding-fiber labels use the EU display; "
+                "canonical total carbs still include fiber. Every created food needs a Weight "
+                "serving and a 1 g measure; Atomic values are not verified gram weights. "
                 "Only state saved when created=true. A timeout blocks automatic retries; reconcile "
                 "the same proposal against its marked remote food. Barcode is local metadata only: "
                 "never claim app barcode scanning works. The public checklist does not submit or "
@@ -75,11 +79,13 @@ def create_read_only_server(connection: ReadOnlyConnection, *, product_service=N
             serving_grams: float = 100,
             barcode: str | None = None,
             density_g_per_ml: float | None = None,
+            category_id: int | None = None,
         ) -> dict:
             """Prepare a private proposal, not a remote food. Nutrient rows need amount/unit.
 
             Name must include brand and variant. carbohydrate_basis is includes_fiber
             or excludes_fiber; both include polyols. Barcode is stored locally only.
+            category_id must come from verified Cronometer data; explicit 0 is uncategorized.
             """
             return call(
                 product_service.prepare,
@@ -91,6 +97,7 @@ def create_read_only_server(connection: ReadOnlyConnection, *, product_service=N
                 serving_grams=serving_grams,
                 barcode=barcode,
                 density_g_per_ml=density_g_per_ml,
+                category_id=category_id,
             )
 
         @server.tool(annotations={"readOnlyHint": True})

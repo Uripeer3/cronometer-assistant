@@ -1,6 +1,6 @@
 # Conversational Cronometer logger — implementation plan
 
-Prepared 16 November 2026. Status: conversational prototype and real-account read-only connectivity/search/food inspection verified; live diary writes and public-food submission are not yet implemented.
+Prepared 16 November 2026. Status: conversational prototype, real-account food lookup, and a controlled private-food creation have been exercised. Live UI review exposed serving-type, category and label-display gaps; creation fixes are under review. Live diary writes, automated existing-food corrections and public-food submission are not yet implemented.
 
 ## Goal and agreed preferences
 
@@ -126,6 +126,27 @@ Acceptance: an absent packaged product can be created from a bilingual label, fo
 
 Reference: [Cronometer's publishing workflow](https://support.cronometer.com/hc/en-us/articles/360018652672-Publishing-a-food-to-the-CRDB-Database). This establishes the user-facing workflow, not the existence of an integration endpoint.
 
+## Custom-food usability and correction gate
+
+Complete this gate before public-submission testing. A successful API response and matching numeric values alone do not establish that the food is usable in Cronometer.
+
+- **Weight-based measures:** create a default `Weight` serving with explicit grams per one serving and an additional `Weight` measure for 1 g. Read back type, amount, value, default measure ID and visibility. A positive `Atomic` value must never be described as a verified gram weight. In the app, select grams and preview an arbitrary portion such as 50 g without logging it.
+- **Category:** expose category IDs during inspection, select a category from verified Cronometer data for the same food family, and include it in the reviewed proposal and read-back. Do not guess numeric IDs or silently default to uncategorized; 0 must be an explicit choice. A full verified category-name lookup remains follow-up work.
+- **Label display:** retain the original carbohydrate convention and canonical total carbs separately. For excluding-fiber labels, use an excluding-fiber display format while storing total carbs including fiber; show the relationship between label carbs, fiber, polyols and the account's net-carb calculation. Do not change account-wide carb preferences to make one product appear correct.
+- **Acceptance:** the saved food retains all label nutrients, missing values remain unknown, the app shows the intended category and serving grams, a 50 g portion converts correctly, and the displayed label's carbohydrate convention is explained. Repeated creation rechecks the existing remote record rather than trusting a stale local success.
+
+### Planned: reviewed correction of an existing private food
+
+Add a separate `prepare_food_correction` / `apply_food_correction` workflow; do not implement edits by deleting and recreating the food or by widening every inherited write method.
+
+1. Read the exact existing food ID, prove account ownership, snapshot its nutrients, measures, category, label format and assistant marker, and show the proposed field-level difference. Distinguish correcting a data-entry mistake from a new product formulation.
+2. Warn about the effect of nutrient/serving edits on diary entries referencing that food. Preserve the food ID and existing measure IDs for an ordinary correction. Use a separate version for a new formulation; never overwrite a shared catalog entry.
+3. Re-read and compare the snapshot immediately before writing. If the user edited the food externally, stop and rebuild the proposal rather than overwriting it. Limit changes to the reviewed fields, preserve unknown nutrients, and keep authentication out of snapshots and journals.
+4. Journal the attempt, update once, and read back the complete result. A timeout permits verification/reconciliation only, never a blind second update. Update the local product record only after matching read-back, retaining the correction history.
+5. Test the same food ID through category, label-format and serving repairs; arbitrary gram portions; stale snapshots; interrupted updates; externally edited records; legacy Atomic measures; and reuse after restart. Mobile and web usability are part of acceptance.
+
+Until that tool exists, corrections use the authenticated Cronometer editor and are explicitly reported as manual UI corrections. Public submission stays a separate user-requested step after usability review, with barcode/photo requirements and Cronometer-controlled approval.
+
 ## Recipes, portions, and corrections
 
 Store ingredients by food ID and quantity, recipe version, cooking assumptions, and optional finished yield. For a reasonably homogeneous batch, a portion of mass p from a batch of finished mass M uses fraction p/M of the recipe’s nutrients. Alternatively use a stated fraction or number of servings when no cooked weight is available. Do not assume ingredient weight equals finished weight.
@@ -181,9 +202,9 @@ Suggested pilot targets, to calibrate with use rather than guarantee: familiar m
 
 ## Immediate next implementation task
 
-Run the compatibility gate, starting with a draft-only MCP tool in the preferred assistant and the actual phone voice mode. In parallel with user-independent development, prepare a narrow adapter interface and tests using synthetic food/label fixtures. Live authentication and diary tests require the user to sign in through an appropriate interface; no password should be pasted into chat.
+Finish the custom-food usability fixes and their live acceptance checks, then add the reviewed existing-food correction workflow above. Keep the current creation-only transport boundary until that narrowly scoped edit path is implemented and tested. Public-submission preparation may follow user review, but direct upload/submission support remains unimplemented.
 
-Choose the connector after the read/write and recipe checks. Use local development first; select always-on hosting only once the phone workflow is validated. Cost depends on the chosen assistant plan and hosting. Reusing an existing assistant does not inherently require a separate model API bill; a dedicated voice app would introduce separate API usage. Obtain current prices before any purchase.
+The next main logging milestone is connecting real food resolution to persistent meal drafts and verified diary add/correct/undo operations. Confirm the account timezone, meal groups and duplicate recovery before the first scoped diary test. Continue the phone voice compatibility check; select always-on hosting after the phone workflow is validated.
 
 ## Sources and limits
 

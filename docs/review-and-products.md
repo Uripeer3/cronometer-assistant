@@ -1,7 +1,7 @@
 # Implementation review and private-food creation
 
 Reviewed 16 November 2026. All examples and automated fixtures are synthetic.
-No new real-account write has been performed by this change.
+The initial change used mocked writes. Later live UI review exposed the usability gaps recorded below.
 
 ## Findings and fixes
 
@@ -108,3 +108,33 @@ checkout. Once the host reconnects, establish a proper checkout and preserve
 ignored databases, session and runtime-key files when synchronizing. Do not
 assume git pull works in the old folder. GitHub and CI remain the source of
 reviewed code while the host is unavailable.
+
+## Follow-up: weight measures, category and label display
+
+Live UI review found that a positive Atomic value can pass numeric read-back while
+the app still shows serving grams as unavailable. Creation now uses Weight measures
+for both the reviewed serving and 1 g. Verification checks the default serving,
+type, amount, visibility, gram measure, category and label format, in addition to
+nutrients. Inspection returns raw measure metadata and only calls Weight values grams.
+
+Product preparation accepts `category_id` from verified Cronometer food inspection.
+Creation requires a selected category; explicit 0 is an intentionally uncategorized
+food. No numeric category meanings are guessed. Completing metadata before the
+first creation keeps the same proposal identity; metadata changes after creation do
+not create another food or silently edit the existing one.
+
+Excluding-fiber labels use the EU display format. Their stored canonical total
+carbohydrates still include fiber. Including-fiber labels retain American 2016.
+This is a display convention, not a reason to change nutrient totals or account
+preferences. Missing nutrients remain unknown.
+
+Reusing a created proposal now rechecks the remote record. Legacy records that fail
+the stronger measure checks require reconciliation and must not be recreated.
+An existing food can be repaired in Cronometer's editor without replacing its ID;
+the separate guarded edit-tool workflow is specified in the implementation plan.
+No existing-food edit HTTP permission is added by these creation fixes.
+
+Acceptance includes selecting grams in the app and previewing 50 g, checking the
+original serving size, category and package-style carbohydrate display. Unit tests
+use synthetic profiles and include stale success, positive Atomic values, missing
+or hidden gram measures, wrong amounts/default measures, and metadata mismatches.
