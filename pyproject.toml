@@ -1,0 +1,31 @@
+[project]
+name = "cronometer-assistant"
+version = "0.1.0"
+description = "Persistent, source-aware meal drafts for a conversational Cronometer assistant"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.optional-dependencies]
+mcp = ["mcp==1.30.0"]
+live = ["cronometer-mcp @ git+https://github.com/rollecode/cronometer-mcp.git@e123a4721093efa55adac665e10a546c105eb117"]
+
+[dependency-groups]
+dev = ["ruff==0.14.5"]
+
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[project.scripts]
+cronometer-assistant = "cronometer_assistant.cli:main"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP", "B"]
