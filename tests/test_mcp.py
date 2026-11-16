@@ -150,6 +150,8 @@ class MCPTests(unittest.TestCase):
             names = {t.name for t in await server.list_tools()}
             self.assertIn("create_verified_cronometer_food", names)
             self.assertIn("prepare_public_food_submission", names)
+            self.assertIn("import_product_photo", names)
+            self.assertIn("get_product_evidence", names)
             self.assertNotIn("commit_meal", names)
             self.assertNotIn("submit_food_for_review", names)
             result = await server.call_tool(
@@ -171,6 +173,26 @@ class MCPTests(unittest.TestCase):
             data = payload(result)
             self.assertTrue(data["ok"])
             pid = data["product"]["proposal_id"]
+            evidence = payload(
+                await server.call_tool(
+                    "attach_product_evidence_reference",
+                    {
+                        "proposal_id": pid,
+                        "role": "package_front",
+                        "provider": "host",
+                        "reference": "synthetic-front",
+                    },
+                )
+            )
+            self.assertFalse(evidence["evidence"]["local_bytes_verified"])
+            blocked_import = payload(
+                await server.call_tool(
+                    "import_product_photo",
+                    {"proposal_id": pid, "role": "package_front", "inbox_name": "front.png"},
+                )
+            )
+            self.assertFalse(blocked_import["ok"])
+            self.assertEqual(client.adds, 0)
             blocked = await server.call_tool(
                 "create_verified_cronometer_food",
                 {

@@ -31,7 +31,9 @@ def create_read_only_server(connection: ReadOnlyConnection, *, product_service=N
                 "After reviewing package photos and verifying the private food, offer public "
                 "submission once if the user has not already requested or declined it. Retaining "
                 "photos privately and sharing them with Cronometer are separate actions. "
-                "This MCP surface does not archive or upload images: only say photos were filed "
+                "Photo import requires the host to transfer files into the configured inbox first. "
+                "Host references alone do not verify local bytes; these tools never upload to Cronometer. "
+                "Only say photos were filed "
                 "when the host provides a durable file reference or verified archive result. "
                 if product_service
                 else "It cannot create drafts or save products. "
@@ -130,5 +132,28 @@ def create_read_only_server(connection: ReadOnlyConnection, *, product_service=N
         def prepare_public_food_submission(proposal_id: str) -> dict:
             """Return the manual public-submission checklist; does NOT submit/publish."""
             return call(product_service.public_submission_checklist, proposal_id)
+
+        @server.tool(annotations={"readOnlyHint": False, "destructiveHint": False})
+        def attach_product_evidence_reference(
+            proposal_id: str, role: str, provider: str, reference: str
+        ) -> dict:
+            """Link an opaque durable host/Library file ID; does not transfer image bytes."""
+            return call(
+                product_service.attach_evidence_reference, proposal_id, role, provider, reference
+            )
+
+        @server.tool(annotations={"readOnlyHint": False, "destructiveHint": False})
+        def import_product_photo(proposal_id: str, role: str, inbox_name: str) -> dict:
+            """Archive an image already transferred into the configured private inbox.
+
+            Accepts a filename only, never arbitrary paths/URLs. No Cronometer upload.
+            Roles: package_front, nutrition_label, barcode, ingredients.
+            """
+            return call(product_service.import_evidence, proposal_id, role, inbox_name)
+
+        @server.tool(annotations={"readOnlyHint": True})
+        def get_product_evidence(proposal_id: str) -> dict:
+            """Review retained references and recheck archived bytes without uploading."""
+            return call(product_service.review_evidence, proposal_id)
 
     return server

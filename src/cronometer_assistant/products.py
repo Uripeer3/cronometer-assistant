@@ -6,6 +6,7 @@ import math
 import re
 from copy import deepcopy
 
+from .evidence import EvidenceArchive
 from .models import ValidationError, normalized, number, text
 from .nutrition import normalize_label
 from .store import Store
@@ -26,8 +27,9 @@ NUTRIENT_IDS = {
 
 
 class ProductService:
-    def __init__(self, store: Store, client):
+    def __init__(self, store: Store, client, *, evidence_inbox=None):
         self.store, self.client = store, client
+        self.evidence = EvidenceArchive(store, store.path.parent / "evidence", inbox=evidence_inbox)
         account = client.user_id
         with store.locked():
             bound = store.get("product_settings", "account")
@@ -323,4 +325,23 @@ class ProductService:
                 "Nutrition-label photo",
             ],
             next_step="Use Cronometer's Publish Food flow; automated submission is not implemented",
+        )
+
+    def attach_evidence_reference(self, proposal_id, role, provider, reference):
+        self._product(proposal_id)
+        row = self.evidence.reference(proposal_id, role, provider, reference)
+        return self.response(evidence=row, remote_food_changed=False)
+
+    def import_evidence(self, proposal_id, role, inbox_name):
+        self._product(proposal_id)
+        row = self.evidence.import_file(proposal_id, role, inbox_name)
+        return self.response(evidence=row, remote_food_changed=False)
+
+    def review_evidence(self, proposal_id):
+        product = self._product(proposal_id)
+        return self.response(
+            proposal_id=proposal_id,
+            remote_food_id=product.get("remote_food_id"),
+            evidence=self.evidence.review(proposal_id),
+            remote_food_changed=False,
         )

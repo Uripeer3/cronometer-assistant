@@ -63,6 +63,7 @@ def main():
         default=Path("data/cronometer-session/session.json"),
         help="Private local Cronometer session; never a password file",
     )
+    parser.add_argument("--evidence-inbox", type=Path, help="Private host-managed image inbox")
     args = parser.parse_args()
     if args.command in {"login", "check-cronometer", "serve-read-only", "serve-products"}:
         from .live import LiveError, ReadOnlyConnection, create_client
@@ -89,7 +90,9 @@ def main():
                     from .products import ProductService
 
                     products = ProductService(
-                        Store(args.db or Path("data/products.sqlite")), connection.client
+                        Store(args.db or Path("data/products.sqlite")),
+                        connection.client,
+                        evidence_inbox=args.evidence_inbox,
                     )
                 create_read_only_server(connection, product_service=products).run(transport="stdio")
         except (LiveError, ValidationError) as error:
