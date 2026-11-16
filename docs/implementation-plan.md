@@ -1,6 +1,6 @@
 # Conversational Cronometer logger — implementation plan
 
-Prepared 16 November 2026. Status: proposed design, supported by documentation and selected source inspection; no account connection or live diary-write test has been performed.
+Prepared 16 November 2026. Status: conversational prototype and real-account read-only connectivity/search/food inspection verified; live diary writes and public-food submission are not yet implemented.
 
 ## Goal and agreed preferences
 
@@ -111,6 +111,20 @@ Handle Hebrew terminology, decimal punctuation, kcal versus kJ, sodium versus sa
 Present a compact read-back of consequential or uncertain values, then save a reusable custom product. A clear photo may need only one short confirmation; ask for a targeted crop if a critical field is unreadable. Do not request the whole table again for a familiar product.
 
 Unlisted nutrients stay unknown. Never silently fill them with zero or copy a generic food’s micronutrients into an exact labelled product. A deliberately requested inferred profile must remain distinguishable from measured/label data.
+
+## Missing packaged foods: private creation and optional public submission
+
+Treat these as separate features. A custom food saved in the user's Cronometer account is immediately reusable there; submission to the shared CRDB starts Cronometer's curation process and does not mean it has been published.
+
+1. **Create a verified private Cronometer food.** Search by barcode and exact brand/product/variant first. If no verified match exists, extract a proposal from the package front and nutrition table. Preserve label basis, serving weight, explicit zeros, unknown nutrients, sugar alcohols and carbohydrate convention. Ask only about unresolved consequential fields. After review, create the food in Cronometer (not only our local store), retain its ID/barcode and label version, and read back its nutrients and measures. Do not silently overwrite similar products or historical formulations. Repeating a save request must reuse the recorded creation or reconcile uncertainty before retrying.
+2. **Offer submission to the public CRDB separately.** Prepare the verified custom food, barcode, clear front and nutrition-label images, and optional notification preference. Submit only when the user explicitly asks to share that product information. Track prepared, submitted/pending, accepted, rejected, or unknown status where the available interface permits; do not promise acceptance, approval timing, or public barcode availability before publication. Exclude homemade recipes and unsupported estimates from public submission.
+3. **Check implementation feasibility.** Review whether the selected connector actually supports publication, evidence-image upload and submission status. No supported submission API is assumed. If automation is unavailable, prepare the package and guide the user through Cronometer's documented Publish Food flow. The private custom food remains usable while curation is pending.
+
+Add proposed tools `create_verified_cronometer_food`, `prepare_public_food_submission`, and `submit_food_for_review`; expose only implemented capabilities. Submission and creation need independent IDs/journals, duplicate protection, and separate outcomes. Never equate a local draft, a saved private food, a submitted food, and an approved public database record.
+
+Acceptance: an absent packaged product can be created from a bilingual label, found again by identity/barcode where supported, and logged at the correct weight without a repeated photo request. A separately authorized submission sends only product information and evidence, while clearly reporting that Cronometer controls publication. An existing packaged food must also pass an exact-variant label comparison as a positive control.
+
+Reference: [Cronometer's publishing workflow](https://support.cronometer.com/hc/en-us/articles/360018652672-Publishing-a-food-to-the-CRDB-Database). This establishes the user-facing workflow, not the existence of an integration endpoint.
 
 ## Recipes, portions, and corrections
 
