@@ -6,7 +6,7 @@ The demo runs on your laptop. It needs an outbound connection to OpenAI and must
 
 1. In [Platform Tunnels](https://platform.openai.com/settings/organization/tunnels), create a tunnel associated with the ChatGPT workspace you will use.
 2. In [Runtime API keys](https://platform.openai.com/settings/organization/api-keys), create a **Restricted** key named `cronometer-demo-runtime` with **Tunnels Read + Use**. The key's principal also needs access to the tunnel. The client does not need an admin key or Manage permission.
-3. Keep the key private. Do not paste it into chat, GitHub, a shell command, or a configuration file.
+3. Keep the key private. Enter it only in the hidden terminal prompt. Optional private-file reuse is described below.
 
 ## Run from your normal terminal
 
@@ -18,7 +18,7 @@ python3 scripts/connect_demo.py --tunnel-id tunnel_YOUR_COMPLETE_ID
 
 The launcher installs locked demo dependencies with `uv`, downloads the current official OpenAI tunnel client for your machine, and verifies the archive against the release's SHA-256 digest. It stores the binary under ignored `.runtime/`. If you already downloaded the supported binary from the Platform Tunnels page, pass `--client-bin /absolute/path/tunnel-client` instead.
 
-It then asks for the restricted runtime key using a hidden terminal prompt. Paste the key there and press Enter. Nothing is echoed or written into the repository. The key is passed to the official client through its process environment; it is not a command-line argument. If `CONTROL_PLANE_API_KEY` is already present in that terminal's environment, it is reused instead of prompting.
+It then asks for the restricted runtime key using a hidden terminal prompt. Paste the key there and press Enter. Nothing is echoed. Without `--save-key`, a newly entered key is not persisted. The key is passed to the official client through its process environment; it is not a command-line argument. Key selection is: `CONTROL_PLANE_API_KEY` environment variable, then an existing saved key, then the hidden prompt.
 
 This is a foreground operator session. Keep the terminal open; Ctrl+C stops the client. Run only **one** client instance per tunnel ID: stdio initialization and subsequent calls must reach the same MCP child process. A local lock prevents two launchers from this checkout, but cannot detect another checkout or another machine using the same ID.
 
@@ -50,3 +50,22 @@ If the client cannot authenticate, check the key's Tunnels Read + Use permission
 - [Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
 
 The launcher follows the public latest-release metadata rather than hardcoding a release URL. The Platform download is an alternative if your account requires a specifically supported build.
+
+## Save the runtime key once
+
+Add `--save-key` to the launcher command, alongside `--mode read-only` if using
+real-food inspection. Enter the key at the hidden prompt. The launcher saves it
+in `.runtime/tunnel-api-key`, mode 0600, inside the private 0700 runtime directory.
+The entire `.runtime/` directory is Git-ignored. This is a plaintext local file
+protected by file permissions, not encrypted storage or an OS keyring.
+
+Future launches automatically reuse it, without needing `--save-key`. The flag
+opts into saving; normal first-time launches continue to prompt without saving.
+An environment key takes priority over a saved file. Shared-readable files and
+symlinks are rejected. Do not print or paste the file contents into chat.
+
+If a key was not saved, its full secret cannot be retrieved again from the
+[API keys page](https://platform.openai.com/settings/organization/api-keys); create
+a replacement Restricted key with Tunnels Read + Use. To replace a locally saved
+key, stop the launcher, remove only `.runtime/tunnel-api-key`, and run again with
+`--save-key`. Deleting this local file does not revoke the key on OpenAI.

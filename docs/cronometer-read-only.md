@@ -40,6 +40,8 @@ same tunnel. Then run:
 python3 scripts/connect_demo.py --tunnel-id YOUR_TUNNEL_ID --mode read-only
 ```
 
+To remember the key, add `--save-key` on the first launch; later launches reuse
+the private Git-ignored file automatically. See [key storage](tunnel-setup.md#save-the-runtime-key-once).
 Enter the restricted OpenAI runtime key privately as before. It authenticates
 the tunnel and is separate from the Cronometer session. The launcher installs the
 locked live extra and selects the separate `serve-read-only` server. Keep the

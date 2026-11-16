@@ -12,6 +12,7 @@ import platform
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -24,6 +25,46 @@ RELEASE_API = "https://api.github.com/repos/openai/tunnel-client/releases/latest
 ASSET_PREFIX = "https://github.com/openai/tunnel-client/releases/download/"
 MAX_DOWNLOAD = 150 * 1024 * 1024
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def validate_key(key: str) -> str:
+    key = key.strip()
+    if not key or any(char.isspace() for char in key):
+        raise ValueError("Runtime API key is empty or contains whitespace")
+    return key
+
+
+def load_saved_key(path: Path) -> str | None:
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return None
+    with os.fdopen(fd) as source:
+        info = os.fstat(source.fileno())
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.getuid()
+            or stat.S_IMODE(info.st_mode) & 0o077
+        ):
+            raise ValueError("Saved runtime key must be a private regular file with mode 0600")
+        return validate_key(source.read(8192))
+
+
+def save_key(path: Path, key: str):
+    key = validate_key(key)
+    info = path.parent.stat()
+    if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o077:
+        raise ValueError("Runtime-key directory must be private with mode 0700")
+    with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as target:
+        temporary = Path(target.name)
+        try:
+            os.fchmod(target.fileno(), 0o600)
+            target.write(key + "\n")
+            target.flush()
+            os.fsync(target.fileno())
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
 
 
 def validate_tunnel_id(value: str) -> str:
@@ -141,6 +182,11 @@ def main() -> int:
     parser.add_argument("--tunnel-id", required=True, type=validate_tunnel_id)
     parser.add_argument("--mode", choices=["demo", "read-only"], default="demo")
     parser.add_argument(
+        "--save-key",
+        action="store_true",
+        help="Save the entered runtime key privately for future launches (Git-ignored)",
+    )
+    parser.add_argument(
         "--client-bin", type=Path, help="Use an already installed official tunnel-client binary"
     )
     args = parser.parse_args()
@@ -166,13 +212,16 @@ def main() -> int:
         if not client.is_file() or not os.access(client, os.X_OK):
             raise ValueError("The official tunnel-client binary is missing or not executable")
         subprocess.run([str(client), "help", "quickstart"], check=True)
-        key = os.environ.get("CONTROL_PLANE_API_KEY", "")
+        key_path = runtime / "tunnel-api-key"
+        key = os.environ.get("CONTROL_PLANE_API_KEY", "") or load_saved_key(key_path)
         if not key:
             if not sys.stdin.isatty():
                 raise ValueError("Run this in your terminal for private API-key entry")
             key = getpass.getpass("Paste restricted runtime API key (hidden): ").strip()
-        if not key or any(char.isspace() for char in key):
-            raise ValueError("Runtime API key is empty or contains whitespace")
+        key = validate_key(key)
+        if args.save_key:
+            save_key(key_path, key)
+            print("Runtime key saved privately for future launches (Git-ignored).", flush=True)
         environment = dict(os.environ)
         environment["CONTROL_PLANE_API_KEY"] = key
         database = ROOT / "data" / "demo.sqlite"
@@ -185,7 +234,7 @@ def main() -> int:
             flush=True,
         )
         print(
-            "The key is passed through the process environment, not saved in this repository.",
+            "The key is passed through the process environment, never command arguments.",
             flush=True,
         )
         print(
@@ -196,7 +245,7 @@ def main() -> int:
             "Wait for readiness, then refresh the ChatGPT connection's available tools.",
             flush=True,
         )
-        # The runtime key is deliberately absent from command arguments and files.
+        # Persistence is opt-in; the runtime key is always absent from command arguments.
         return subprocess.run(command, cwd=ROOT, env=environment).returncode
 
 

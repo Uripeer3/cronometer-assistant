@@ -15,6 +15,35 @@ spec.loader.exec_module(launcher)
 
 
 class TunnelLauncherTests(unittest.TestCase):
+    def test_saved_key_round_trip_is_private(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "runtime-key"
+            self.assertIsNone(launcher.load_saved_key(path))
+            launcher.save_key(path, "synthetic-key")
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(launcher.load_saved_key(path), "synthetic-key")
+            path.chmod(0o644)
+            with self.assertRaises(ValueError):
+                launcher.load_saved_key(path)
+
+    def test_saved_key_rejects_symlinks_and_shared_directory(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "runtime-key"
+            path.symlink_to(Path(folder) / "elsewhere")
+            with self.assertRaises(OSError):
+                launcher.load_saved_key(path)
+            Path(folder).chmod(0o755)
+            with self.assertRaises(ValueError):
+                launcher.save_key(path, "synthetic-key")
+
+    def test_invalid_key_is_never_saved(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "runtime-key"
+            for value in ("", "two words", "one\ntwo"):
+                with self.assertRaises(ValueError):
+                    launcher.save_key(path, value)
+            self.assertFalse(path.exists())
+
     def test_read_only_mode_uses_separate_server_and_private_session(self):
         args = launcher.launch_arguments(
             Path("/client"),
