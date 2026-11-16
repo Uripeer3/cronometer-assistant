@@ -1,5 +1,7 @@
 """Persistent meal workflow; the assistant supplies language, this layer enforces state."""
 
+import hashlib
+import json
 from datetime import date, datetime
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -256,6 +258,8 @@ class MealService:
             "name",
             "basis_grams",
             "conversion_notes",
+            "carbohydrate_basis",
+            "label_nutrients_per_100g",
             "nutrients_per_100g",
             "missing_fields_are_unknown",
         }:
@@ -269,10 +273,15 @@ class MealService:
                 key: {"amount": row["amount"], "unit": row["unit"]}
                 for key, row in proposal["nutrients_per_100g"].items()
             },
+            carbohydrate_basis="includes_fiber",
         )
+        # Canonical proposals already include fiber: do not convert them twice.
+        identity = json.dumps(
+            [normalized(validated["name"]), validated["nutrients_per_100g"]], sort_keys=True
+        ).encode()
         food = Food.from_dict(
             {
-                "food_id": "demo-label:" + uuid4().hex,
+                "food_id": "demo-label:" + hashlib.sha256(identity).hexdigest(),
                 "name": validated["name"],
                 "source": "USER_LABEL",
                 "preparation": "as_sold",

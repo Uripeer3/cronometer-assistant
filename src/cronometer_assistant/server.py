@@ -103,11 +103,13 @@ def create_server(service: MealService):
         basis_unit: str,
         nutrients: dict,
         density_g_per_ml: float | None = None,
+        carbohydrate_basis: str = "unspecified",
     ) -> dict:
         """Validate photo-extracted label fields; each nutrient has amount and unit.
 
         basis_unit is g or ml. A per-ml label needs a supported density to convert
-        to grams. Absent values stay unknown. Does not read images or save food.
+        to grams. Establish carbohydrate_basis as includes_fiber or excludes_fiber;
+        both include polyols. Absent values stay unknown. Does not save food.
         """
         return call(
             service.propose_label,
@@ -116,6 +118,7 @@ def create_server(service: MealService):
             basis_unit=basis_unit,
             nutrients=nutrients,
             density_g_per_ml=density_g_per_ml,
+            carbohydrate_basis=carbohydrate_basis,
         )
 
     @mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False})

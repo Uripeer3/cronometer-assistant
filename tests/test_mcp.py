@@ -127,3 +127,45 @@ class MCPTests(unittest.TestCase):
                     again = payload(await session.call_tool("commit_meal", args))
                     self.assertTrue(again["already_logged"])
                     self.assertFalse(again["real_diary_changed"])
+
+    def test_product_mode_surface_and_reviewed_creation(self):
+        if importlib.util.find_spec("mcp") is None:
+            if os.environ.get("REQUIRE_MCP_TESTS") == "1":
+                self.fail("MCP SDK is required")
+            self.skipTest("MCP SDK not installed")
+        asyncio.run(self.product_surface())
+
+    async def product_surface(self):
+        from cronometer_assistant.live import ReadOnlyConnection
+        from cronometer_assistant.products import ProductService
+        from cronometer_assistant.read_only_server import create_read_only_server
+        from cronometer_assistant.store import Store
+        from test_products import FakeClient
+
+        with tempfile.TemporaryDirectory() as directory:
+            client = FakeClient()
+            service = ProductService(Store(Path(directory) / "products.sqlite"), client)
+            server = create_read_only_server(ReadOnlyConnection(client), product_service=service)
+            names = {t.name for t in await server.list_tools()}
+            self.assertIn("create_verified_cronometer_food", names)
+            self.assertIn("prepare_public_food_submission", names)
+            self.assertNotIn("commit_meal", names)
+            self.assertNotIn("submit_food_for_review", names)
+            result = await server.call_tool("prepare_cronometer_product", {
+                "name": "Synthetic brand, vanilla", "basis_amount": 100, "basis_unit": "g",
+                "nutrients": {"protein": {"amount": 10, "unit": "g"}},
+            })
+            # FastMCP returns content and structured data for dictionary tools.
+            data = result[1] if isinstance(result, tuple) else None
+            self.assertTrue(data["ok"])
+            pid = data["product"]["proposal_id"]
+            blocked = await server.call_tool("create_verified_cronometer_food", {
+                "proposal_id": pid, "reviewed": False,
+            })
+            self.assertFalse(blocked[1]["ok"])
+            self.assertEqual(client.adds, 0)
+            created = await server.call_tool("create_verified_cronometer_food", {
+                "proposal_id": pid, "reviewed": True,
+            })
+            self.assertTrue(created[1]["created"])
+            self.assertFalse(created[1]["real_diary_changed"])

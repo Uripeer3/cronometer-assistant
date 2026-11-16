@@ -2,7 +2,7 @@
 
 A private prototype for logging meals through an existing AI assistant. The assistant handles Hebrew/English conversation and attached photos; this Python service owns persistent meal drafts, food-source policy, product memory, nutrient validation, and write reconciliation.
 
-**Current milestone: tested conversational demo, plus a separate real-food inspection mode awaiting account verification. No real Cronometer diary writes are implemented.** Demo food profiles are invented fixtures; their NCCDB/USDA source labels exercise ranking policy and are not authentic database extracts.
+**Current milestone: tested conversational demo and real-food inspection, plus opt-in private custom-food creation awaiting a controlled live write test. No real Cronometer diary writes are implemented.** Demo food profiles are invented fixtures; their NCCDB/USDA source labels exercise ranking policy and are not authentic database extracts.
 
 ## Try the working demo
 
@@ -70,3 +70,16 @@ Use short branches and pull requests. CI checks formatting/lint, domain tests, p
 5. Add saved/versioned recipes, deployment authentication, backups, and the real-meal voice pilot.
 
 GitHub stores source and synthetic fixtures. Runtime SQLite files, credentials, session tokens, and package-label photographs remain outside the repository.
+
+## Review fixes and private custom foods
+
+The [implementation review](docs/review-and-products.md) records the label,
+unit, duplication, and creation-recovery fixes and the product-mode test procedure.
+Label carbs now require an explicit fiber convention; raw values and sugar alcohols
+are preserved. The current read-only connection stays read-only.
+
+After updating, an explicit `--mode products` launch adds reviewed private-food
+creation with an account-bound journal and read-back checks. It cannot edit
+existing foods, write a diary, link barcodes, or publish to CRDB. The public
+submission tool is a checklist, not a submission API. Live creation still needs
+a user-reviewed test; no food has been created by the automated test suite.

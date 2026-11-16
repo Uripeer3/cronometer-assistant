@@ -15,6 +15,23 @@ spec.loader.exec_module(launcher)
 
 
 class TunnelLauncherTests(unittest.TestCase):
+    def test_product_mode_uses_its_own_database_and_explicit_command(self):
+        args = launcher.launch_arguments(
+            Path("/client"), "tunnel_" + "a" * 32,
+            Path("/python"), Path("/data/demo.sqlite"), mode="products",
+        )
+        child = shlex.split(args[args.index("--mcp.command") + 1])
+        self.assertIn("serve-products", child)
+        self.assertEqual(child[child.index("--db") + 1], "/data/products.sqlite")
+
+    def test_oversized_saved_key_is_rejected_without_echo(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "key"
+            launcher.save_key(path, "a" * 8193)
+            with self.assertRaises(ValueError) as error:
+                launcher.load_saved_key(path)
+            self.assertNotIn("a" * 100, str(error.exception))
+
     def test_saved_key_round_trip_is_private(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "runtime-key"

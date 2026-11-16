@@ -47,7 +47,10 @@ def load_saved_key(path: Path) -> str | None:
             or stat.S_IMODE(info.st_mode) & 0o077
         ):
             raise ValueError("Saved runtime key must be a private regular file with mode 0600")
-        return validate_key(source.read(8192))
+        key = source.read(8193)
+        if len(key) > 8192:
+            raise ValueError("Saved runtime key exceeds the size limit")
+        return validate_key(key)
 
 
 def save_key(path: Path, key: str):
@@ -144,8 +147,8 @@ def launch_arguments(
     client: Path, tunnel_id: str, python: Path, database: Path, *, mode: str = "demo"
 ) -> list[str]:
     validate_tunnel_id(tunnel_id)
-    if mode not in {"demo", "read-only"}:
-        raise ValueError("mode must be demo or read-only")
+    if mode not in {"demo", "read-only", "products"}:
+        raise ValueError("mode must be demo, read-only, or products")
     server_args = (
         ["serve", "--db", str(database)]
         if mode == "demo"
@@ -155,6 +158,11 @@ def launch_arguments(
             str(database.parent / "cronometer-session/session.json"),
         ]
     )
+    if mode == "products":
+        server_args = [
+            "serve-products", "--db", str(database.parent / "products.sqlite"),
+            "--session", str(database.parent / "cronometer-session/session.json"),
+        ]
     command = shlex.join(
         [
             str(python),
@@ -180,7 +188,7 @@ def launch_arguments(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tunnel-id", required=True, type=validate_tunnel_id)
-    parser.add_argument("--mode", choices=["demo", "read-only"], default="demo")
+    parser.add_argument("--mode", choices=["demo", "read-only", "products"], default="demo")
     parser.add_argument(
         "--save-key",
         action="store_true",
@@ -204,7 +212,7 @@ def main() -> int:
         except BlockingIOError as error:
             raise ValueError("A tunnel launcher is already active for this checkout") from error
         print("Installing the locked dependencies…", flush=True)
-        extras = ["--extra", "live"] if args.mode == "read-only" else []
+        extras = ["--extra", "live"] if args.mode != "demo" else []
         subprocess.run(
             [uv, "sync", "--locked", "--extra", "mcp", *extras, "--no-dev"], cwd=ROOT, check=True
         )

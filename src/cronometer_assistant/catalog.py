@@ -2,7 +2,7 @@
 
 from typing import Protocol
 
-from .models import Food, Nutrient, ValidationError, normalized
+from .models import UNITS, Food, Nutrient, ValidationError, normalized
 from .store import Store
 
 
@@ -197,16 +197,23 @@ class CronometerReadOnlyCatalog:
             307: "sodium",
         }
         for row in raw.get("nutrients", []):
+            if not isinstance(row, dict) or type(row.get("id")) is not int or row["id"] <= 0:
+                continue
             meta = definitions.get(row.get("id"))
             if meta is None:
                 continue
             key = canonical.get(row["id"], f"cronometer_{row['id']}")
             unit = meta.get("unit")
             unit = {"µg": "ug", "μg": "ug"}.get(unit, unit)
+            if unit not in UNITS:
+                continue  # Raw inspection retains these rows; never invent their units.
             nutrients[key] = Nutrient(row.get("amount"), unit)
         source = raw.get("source", source)
         source_key = str(source)
+        prefix, separator, suffix = source_key.partition(":")
         source_name = self.source_map.get(source_key, source_key)
+        if separator and suffix.isdigit() and prefix in self.source_map:
+            source_name = self.source_map[prefix]
         if source_name not in {"NCCDB", "USDA", "BRANDED", "USER_LABEL"}:
             source_name = f"UNVERIFIED:{source_key}"
         return Food(

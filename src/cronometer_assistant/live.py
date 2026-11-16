@@ -27,8 +27,17 @@ class LoginRequired(LiveError):
     pass
 
 
-def check_request(method: str, url: str, payload: dict | None):
+def check_request(
+    method: str, url: str, payload: dict | None, *, allow_product_creation: bool = False
+):
     """Fail closed before HTTP, including accidental calls to upstream write methods."""
+    if url == "/api/v2/add_food" and method.upper() == "POST" and allow_product_creation:
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(data, dict) or type(data.get("id")) is not int or data["id"] != 0:
+            raise LiveError("Product mode can create new foods, never edit existing foods")
+        if data.get("meal") or data.get("ingredients"):
+            raise LiveError("Recipe creation is not enabled in product mode")
+        return
     if method.upper() != "POST" or url not in READ_ENDPOINTS | {"/api/v2/login"}:
         raise LiveError("This connection permits only authentication and food reads")
     if url == "/api/v2/login" and (
@@ -110,7 +119,10 @@ class SessionFile:
                 temporary.unlink(missing_ok=True)
 
 
-def create_client(session_path: Path, *, interactive: bool = False, transport=None):
+def create_client(
+    session_path: Path, *, interactive: bool = False,
+    allow_product_creation: bool = False, transport=None,
+):
     try:
         import httpx
         from cronometer_mcp.client import CronometerClient, CronometerError
@@ -128,7 +140,9 @@ def create_client(session_path: Path, *, interactive: bool = False, transport=No
 
     class RestrictedHTTP(httpx.Client):
         def request(self, method, url, **kwargs):
-            check_request(method, str(url), kwargs.get("json"))
+            check_request(
+                method, str(url), kwargs.get("json"), allow_product_creation=allow_product_creation
+            )
             return super().request(method, url, **kwargs)
 
     class LocalSessionClient(CronometerClient):
@@ -274,6 +288,9 @@ class ReadOnlyConnection:
                     "unit": meta.get("unit"),
                     "amount": amount,
                     "known": amount is not None,
+                    "classified": bool(
+                        meta.get("name") and meta.get("unit") and row.get("id", 0) > 0
+                    ),
                 }
             )
         return self.response(
