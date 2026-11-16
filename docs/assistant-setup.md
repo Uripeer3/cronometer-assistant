@@ -32,7 +32,7 @@ The five default foods have synthetic profiles: cooked rice, dry rice, egg, yogu
 
 Current OpenAI documentation describes restrictions on custom MCP write access. Having a ChatGPT subscription or access to Live voice does not prove this custom server can be used on the phone. Verify this account before buying another plan or implementing public hosting.
 
-The first check is whether the account permits a custom MCP connection with write tools. If yes, the next implementation task is authenticated remote transport (OAuth or the supported private tunnel route), followed by a draft-only phone test. This release does not supply that remote endpoint.
+The first check is whether the account permits a custom MCP connection with write tools. If the Connection form offers **Tunnel**, use the [private tunnel setup guide](tunnel-setup.md) to connect the existing stdio server. This release supplies a foreground tunnel launcher, rather than a public endpoint or hosted OAuth service. The phone voice test is still required.
 
 Test English, Hebrew, code-switching, one follow-up, and an attached nutrition-table photo. Count tool approval taps and time to complete a draft. Never describe success in a simulated diary as an entry in the real Cronometer account.
 
