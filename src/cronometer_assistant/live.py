@@ -16,9 +16,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .models import ValidationError, number, text
 
-READ_ENDPOINTS = frozenset(
-    {"/api/v2/find_food", "/api/v2/get_food", "/api/v2/get_nutrients"}
-)
+READ_ENDPOINTS = frozenset({"/api/v2/find_food", "/api/v2/get_food", "/api/v2/get_nutrients"})
 
 
 class LiveError(Exception):
@@ -181,7 +179,9 @@ def create_client(session_path: Path, *, interactive: bool = False, transport=No
             except LiveError:
                 raise
             except Exception:
-                raise LiveError("Cronometer login failed; check credentials, 2FA, or connection") from None
+                raise LiveError(
+                    "Cronometer login failed; check credentials, 2FA, or connection"
+                ) from None
             finally:
                 del self._get_credentials
                 self._one_time_code = None
@@ -219,7 +219,9 @@ class ReadOnlyConnection:
             raise
         except Exception:
             # Never propagate upstream exception payloads containing tokens/account data.
-            raise LiveError("Cronometer read failed; check connection or sign in again locally") from None
+            raise LiveError(
+                "Cronometer read failed; check connection or sign in again locally"
+            ) from None
 
     def check(self):
         # Make an authenticated read: a cached token alone is not proof of connectivity.

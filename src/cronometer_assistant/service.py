@@ -238,7 +238,9 @@ class MealService:
             if meal["revision"] != expected_revision:
                 raise ValidationError("Retrieve the current draft revision before deleting")
             if self.store.get("operations", meal_id) is not None:
-                raise ValidationError("This meal has a logging operation; draft deletion is blocked")
+                raise ValidationError(
+                    "This meal has a logging operation; draft deletion is blocked"
+                )
             self.store.delete("meals", meal_id)
         return self.response(meal_id=meal_id, deleted=True, diary_entries_deleted=0)
 

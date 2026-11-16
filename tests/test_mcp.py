@@ -74,13 +74,24 @@ class MCPTests(unittest.TestCase):
                     self.assertIn("propose_product_from_label", names)
                     self.assertIn("delete_meal_draft", names)
                     draft = payload(await session.call_tool("begin_meal", {"title": "discard me"}))
-                    deleted = payload(await session.call_tool("delete_meal_draft", {
-                        "meal_id": draft["meal"]["meal_id"], "expected_revision": 0,
-                    }))
+                    deleted = payload(
+                        await session.call_tool(
+                            "delete_meal_draft",
+                            {
+                                "meal_id": draft["meal"]["meal_id"],
+                                "expected_revision": 0,
+                            },
+                        )
+                    )
                     self.assertTrue(deleted["deleted"])
-                    missing = payload(await session.call_tool("get_meal_review", {
-                        "meal_id": draft["meal"]["meal_id"],
-                    }))
+                    missing = payload(
+                        await session.call_tool(
+                            "get_meal_review",
+                            {
+                                "meal_id": draft["meal"]["meal_id"],
+                            },
+                        )
+                    )
                     self.assertFalse(missing["ok"])
                     created = payload(
                         await session.call_tool(

@@ -17,8 +17,11 @@ spec.loader.exec_module(launcher)
 class TunnelLauncherTests(unittest.TestCase):
     def test_read_only_mode_uses_separate_server_and_private_session(self):
         args = launcher.launch_arguments(
-            Path("/client"), "tunnel_" + "a" * 32,
-            Path("/python"), Path("/some data/demo.sqlite"), mode="read-only",
+            Path("/client"),
+            "tunnel_" + "a" * 32,
+            Path("/python"),
+            Path("/some data/demo.sqlite"),
+            mode="read-only",
         )
         child = shlex.split(args[args.index("--mcp.command") + 1])
         self.assertIn("serve-read-only", child)

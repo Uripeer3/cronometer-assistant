@@ -56,7 +56,9 @@ def main():
     )
     parser.add_argument("--db", type=Path, help="Persistent SQLite path (private runtime data)")
     parser.add_argument(
-        "--session", type=Path, default=Path("data/cronometer-session/session.json"),
+        "--session",
+        type=Path,
+        default=Path("data/cronometer-session/session.json"),
         help="Private local Cronometer session; never a password file",
     )
     args = parser.parse_args()
@@ -79,7 +81,10 @@ def main():
                 create_read_only_server(connection).run(transport="stdio")
         except (LiveError, OSError):
             # Never print upstream exceptions or request payloads to terminal/MCP output.
-            print("Connection unavailable. Check setup and run login in your terminal.", file=sys.stderr)
+            print(
+                "Connection unavailable. Check setup and run login in your terminal.",
+                file=sys.stderr,
+            )
             raise SystemExit(1) from None
         finally:
             if connection:

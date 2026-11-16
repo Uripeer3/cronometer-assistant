@@ -73,12 +73,17 @@ class BoundaryTests(unittest.TestCase):
         class FakeClient:
             def get_food(self, fid):
                 return {
-                    "id": fid, "name": "Synthetic food", "source": 77,
+                    "id": fid,
+                    "name": "Synthetic food",
+                    "source": 77,
                     "measures": [{"id": 4, "name": "portion", "value": 80}],
                     "nutrients": [
-                        {"id": 1, "amount": 0}, {"id": 2}, {"id": 3, "amount": 1.2},
+                        {"id": 1, "amount": 0},
+                        {"id": 2},
+                        {"id": 3, "amount": 1.2},
                     ],
-                    "token": "must-not-return", "userId": 123,
+                    "token": "must-not-return",
+                    "userId": 123,
                 }
 
             def get_nutrient_definitions(self):
@@ -126,13 +131,22 @@ class PinnedClientTests(unittest.TestCase):
         if request.url.path == "/api/v2/login":
             self.assertIsNone(payload["timezone"])
             if payload["userCode"] is None:
-                return self.httpx.Response(200, json={"result": "FAIL", "error": "TOTP_CODE_REQUIRED"})
+                return self.httpx.Response(
+                    200, json={"result": "FAIL", "error": "TOTP_CODE_REQUIRED"}
+                )
             self.assertEqual(payload["userCode"], "123456")
-            return self.httpx.Response(200, json={
-                "result": "SUCCESS", "id": 1, "sessionKey": "fake-token",
-                "timezone": "Asia/Jerusalem",
-            })
-        return self.httpx.Response(200, json={"nutrients": [{"id": 208, "name": "Energy", "unit": "kcal"}]})
+            return self.httpx.Response(
+                200,
+                json={
+                    "result": "SUCCESS",
+                    "id": 1,
+                    "sessionKey": "fake-token",
+                    "timezone": "Asia/Jerusalem",
+                },
+            )
+        return self.httpx.Response(
+            200, json={"nutrients": [{"id": 208, "name": "Energy", "unit": "kcal"}]}
+        )
 
     def client(self, interactive=False):
         client = create_client(
@@ -142,9 +156,12 @@ class PinnedClientTests(unittest.TestCase):
         return client
 
     def test_hidden_login_with_one_time_code_and_session_reuse(self):
-        with patch("sys.stdin.isatty", return_value=True), patch(
-            "getpass.getpass", side_effect=["example@invalid.test", "fake-password", "123456"]
-        ) as prompt:
+        with (
+            patch("sys.stdin.isatty", return_value=True),
+            patch(
+                "getpass.getpass", side_effect=["example@invalid.test", "fake-password", "123456"]
+            ) as prompt,
+        ):
             client = self.client(interactive=True)
             client.login()
         self.assertEqual(prompt.call_count, 3)
@@ -163,12 +180,12 @@ class PinnedClientTests(unittest.TestCase):
     def test_expired_session_does_not_use_environment_password_or_prompt(self):
         SessionFile(self.path).write(1, "expired", "Asia/Jerusalem")
         client = self.client()
-        client._http._transport = self.httpx.MockTransport(
-            lambda request: self.httpx.Response(401)
-        )
-        with patch.dict(os.environ, {"CRONOMETER_PASSWORD": "must-not-use"}), patch(
-            "getpass.getpass", side_effect=AssertionError("No prompt allowed")
-        ), self.assertRaises(LoginRequired):
+        client._http._transport = self.httpx.MockTransport(lambda request: self.httpx.Response(401))
+        with (
+            patch.dict(os.environ, {"CRONOMETER_PASSWORD": "must-not-use"}),
+            patch("getpass.getpass", side_effect=AssertionError("No prompt allowed")),
+            self.assertRaises(LoginRequired),
+        ):
             ReadOnlyConnection(client).check()
 
     def test_inherited_write_methods_blocked_before_transport(self):

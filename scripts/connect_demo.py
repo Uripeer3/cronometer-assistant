@@ -108,7 +108,11 @@ def launch_arguments(
     server_args = (
         ["serve", "--db", str(database)]
         if mode == "demo"
-        else ["serve-read-only", "--session", str(database.parent / "cronometer-session/session.json")]
+        else [
+            "serve-read-only",
+            "--session",
+            str(database.parent / "cronometer-session/session.json"),
+        ]
     )
     command = shlex.join(
         [
@@ -176,7 +180,10 @@ def main() -> int:
         command = launch_arguments(
             client, args.tunnel_id, ROOT / ".venv/bin/python", database, mode=args.mode
         )
-        print(f"Starting {args.mode.upper()} tunnel. Keep this terminal open; Ctrl+C stops it.", flush=True)
+        print(
+            f"Starting {args.mode.upper()} tunnel. Keep this terminal open; Ctrl+C stops it.",
+            flush=True,
+        )
         print(
             "The key is passed through the process environment, not saved in this repository.",
             flush=True,
