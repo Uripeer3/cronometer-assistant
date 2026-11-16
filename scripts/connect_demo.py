@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install and run the official tunnel client for this repository's local DEMO server."""
+"""Run the official tunnel client for demo or read-only Cronometer food inspection."""
 
 import argparse
 import fcntl
@@ -99,16 +99,23 @@ def acquire_client(folder: Path) -> Path:
     return destination
 
 
-def launch_arguments(client: Path, tunnel_id: str, python: Path, database: Path) -> list[str]:
+def launch_arguments(
+    client: Path, tunnel_id: str, python: Path, database: Path, *, mode: str = "demo"
+) -> list[str]:
     validate_tunnel_id(tunnel_id)
+    if mode not in {"demo", "read-only"}:
+        raise ValueError("mode must be demo or read-only")
+    server_args = (
+        ["serve", "--db", str(database)]
+        if mode == "demo"
+        else ["serve-read-only", "--session", str(database.parent / "cronometer-session/session.json")]
+    )
     command = shlex.join(
         [
             str(python),
             "-m",
             "cronometer_assistant",
-            "serve",
-            "--db",
-            str(database),
+            *server_args,
         ]
     )
     return [
@@ -128,6 +135,7 @@ def launch_arguments(client: Path, tunnel_id: str, python: Path, database: Path)
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tunnel-id", required=True, type=validate_tunnel_id)
+    parser.add_argument("--mode", choices=["demo", "read-only"], default="demo")
     parser.add_argument(
         "--client-bin", type=Path, help="Use an already installed official tunnel-client binary"
     )
@@ -145,8 +153,11 @@ def main() -> int:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as error:
             raise ValueError("A tunnel launcher is already active for this checkout") from error
-        print("Installing the locked demo dependencies…", flush=True)
-        subprocess.run([uv, "sync", "--locked", "--extra", "mcp", "--no-dev"], cwd=ROOT, check=True)
+        print("Installing the locked dependencies…", flush=True)
+        extras = ["--extra", "live"] if args.mode == "read-only" else []
+        subprocess.run(
+            [uv, "sync", "--locked", "--extra", "mcp", *extras, "--no-dev"], cwd=ROOT, check=True
+        )
         client = args.client_bin.resolve() if args.client_bin else acquire_client(runtime)
         if not client.is_file() or not os.access(client, os.X_OK):
             raise ValueError("The official tunnel-client binary is missing or not executable")
@@ -162,8 +173,10 @@ def main() -> int:
         environment["CONTROL_PLANE_API_KEY"] = key
         database = ROOT / "data" / "demo.sqlite"
         database.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        command = launch_arguments(client, args.tunnel_id, ROOT / ".venv/bin/python", database)
-        print("Starting DEMO tunnel. Keep this terminal open; Ctrl+C stops it.", flush=True)
+        command = launch_arguments(
+            client, args.tunnel_id, ROOT / ".venv/bin/python", database, mode=args.mode
+        )
+        print(f"Starting {args.mode.upper()} tunnel. Keep this terminal open; Ctrl+C stops it.", flush=True)
         print(
             "The key is passed through the process environment, not saved in this repository.",
             flush=True,
@@ -173,7 +186,7 @@ def main() -> int:
             flush=True,
         )
         print(
-            "Wait for readiness, then create the ChatGPT connection and test a draft tool.",
+            "Wait for readiness, then refresh the ChatGPT connection's available tools.",
             flush=True,
         )
         # The runtime key is deliberately absent from command arguments and files.
@@ -184,7 +197,7 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except KeyboardInterrupt:
-        print("\nDemo tunnel stopped.", file=sys.stderr)
+        print("\nTunnel stopped.", file=sys.stderr)
         raise SystemExit(130) from None
     except (ValueError, OSError, urllib.error.URLError, subprocess.CalledProcessError) as error:
         # Do not include subprocess environments or authentication values in diagnostics.

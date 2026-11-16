@@ -1,7 +1,8 @@
-"""Run a deterministic demo or a local MCP server. Neither changes Cronometer."""
+"""Run demo tools or inspect a real Cronometer food catalog without diary writes."""
 
 import argparse
 import json
+import sys
 import tempfile
 from pathlib import Path
 
@@ -50,9 +51,40 @@ def run_demo(path: Path) -> dict:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["demo", "serve"])
+    parser.add_argument(
+        "command", choices=["demo", "serve", "login", "check-cronometer", "serve-read-only"]
+    )
     parser.add_argument("--db", type=Path, help="Persistent SQLite path (private runtime data)")
+    parser.add_argument(
+        "--session", type=Path, default=Path("data/cronometer-session/session.json"),
+        help="Private local Cronometer session; never a password file",
+    )
     args = parser.parse_args()
+    if args.command in {"login", "check-cronometer", "serve-read-only"}:
+        from .live import LiveError, ReadOnlyConnection, create_client
+
+        connection = None
+        try:
+            connection = ReadOnlyConnection(
+                create_client(args.session, interactive=args.command == "login")
+            )
+            if args.command == "login":
+                connection.client.login()
+                print("Session saved privately. Run check-cronometer to verify food-data access.")
+            elif args.command == "check-cronometer":
+                print(json.dumps(connection.check(), ensure_ascii=False, indent=2))
+            else:
+                from .read_only_server import create_read_only_server
+
+                create_read_only_server(connection).run(transport="stdio")
+        except (LiveError, OSError):
+            # Never print upstream exceptions or request payloads to terminal/MCP output.
+            print("Connection unavailable. Check setup and run login in your terminal.", file=sys.stderr)
+            raise SystemExit(1) from None
+        finally:
+            if connection:
+                connection.close()
+        return
     if args.command == "demo":
         if args.db:
             print(json.dumps(run_demo(args.db), ensure_ascii=False, indent=2))

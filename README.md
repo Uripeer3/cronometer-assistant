@@ -2,7 +2,7 @@
 
 A private prototype for logging meals through an existing AI assistant. The assistant handles Hebrew/English conversation and attached photos; this Python service owns persistent meal drafts, food-source policy, product memory, nutrient validation, and write reconciliation.
 
-**Current milestone: local MCP tools and a simulated diary. No real Cronometer diary writes are implemented.** Demo food profiles are invented fixtures; their NCCDB/USDA source labels exercise ranking policy and are not authentic database extracts.
+**Current milestone: tested conversational demo, plus a separate real-food inspection mode awaiting account verification. No real Cronometer diary writes are implemented.** Demo food profiles are invented fixtures; their NCCDB/USDA source labels exercise ranking policy and are not authentic database extracts.
 
 ## Try the working demo
 
@@ -31,6 +31,7 @@ To test it in ChatGPT through an OpenAI private tunnel, use the [tunnel setup gu
 ## Implemented
 
 - Persistent drafts with revisions, consumption intent, and unresolved questions.
+- Revision-checked deletion of unlogged drafts; logged/uncertain meals are protected.
 - Source-aware food ranking: identity/preparation first, then database preference.
 - Verified product aliases, including Hebrew names, persisted across restarts.
 - Validation of structured label data, including serving basis, kJ/kcal, mass units, salt equivalent, and explicit density for ml-to-g conversion. The assistant reads the image; the backend validates extracted values.
@@ -38,6 +39,7 @@ To test it in ChatGPT through an OpenAI private tunnel, use the [tunnel setup gu
 - A persistent simulated diary and operation journal. Repeated commits reuse the same meal operation; a new identical meal is still valid.
 - Durable markers before writes, read-back verification, and reconciliation after an ambiguous timeout. No claim of exactly-once delivery against Cronometer.
 - A read-only adapter interface around the pinned existing Cronometer client, tested with synthetic response fixtures.
+- Separate real-food inspection tools with hidden local login, one-time 2FA, private session storage and blocked diary writes. See the [read-only guide](docs/cronometer-read-only.md).
 - A pure recipe-portion calculation using finished batch weight. Saved recipe versions and native recipe writes are future work.
 
 ## Tool workflow
@@ -49,20 +51,21 @@ To test it in ChatGPT through an OpenAI private tunnel, use the [tunnel setup gu
 5. Once the user identifies the consumed portion, set `intent=eaten` and review again.
 6. `commit_meal` writes only to the simulated diary. It reports committed only after read-back checks.
 7. `get_logging_status` lets a later session resume the same draft or inspect an unfinished operation.
+8. `delete_meal_draft` discards an unlogged draft when the user asks. It cannot undo diary entries.
 
 Photo-based product entry uses `propose_product_from_label` followed by `save_verified_product`. Product saving is currently local to the demo catalog. `remember_product` records an alias only after the user establishes the preference.
 
 ## Development and ownership
 
-Our application is independent of the upstream connector. Only the optional `live` extra depends on [rollecode/cronometer-mcp](https://github.com/rollecode/cronometer-mcp), pinned to commit `e123a4721093efa55adac665e10a546c105eb117`. Nothing from that project has been copied into this source tree. The live adapter accepts an explicitly supplied authenticated client; this milestone does not expose live authentication or real writes through MCP.
+Our application is independent of the upstream connector. Only the optional `live` extra depends on [rollecode/cronometer-mcp](https://github.com/rollecode/cronometer-mcp), pinned to commit `e123a4721093efa55adac665e10a546c105eb117`. Nothing from that project has been copied into this source tree. Live login uses hidden local terminal prompts; credentials and real writes are never exposed through MCP.
 
 Use short branches and pull requests. CI checks formatting/lint, domain tests, package installation, and a real SDK/stdio round trip. Test fixtures need no food/health data, credentials, or repository secrets. Read [development notes](docs/development.md) and the [implementation plan](docs/implementation-plan.md).
 
 ## Next milestones
 
-1. Verify custom write-tool availability and phone voice behavior in the chosen assistant; measure required taps.
-2. Review the upstream authentication/session behavior and authenticate interactively without credentials in chat.
-3. Establish source-code mappings and nutrient/serving fidelity against the account.
+1. The initial Hebrew/English conversational draft test passed; continue measuring voice friction.
+2. Run the [real-account read-only check](docs/cronometer-read-only.md), including interactive login.
+3. Establish source-code mappings and nutrient/serving fidelity against the app.
 4. Implement controlled live writes and corrections with explicit integration tests.
 5. Add saved/versioned recipes, deployment authentication, backups, and the real-meal voice pilot.
 

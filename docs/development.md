@@ -10,6 +10,7 @@
 | `store.py` | SQLite documents and a host-local cross-process operation lock |
 | `service.py` | Draft revisions, product memory, review, commit journal and reconciliation |
 | `backend.py` | Diary boundary and the simulated implementation |
+| `live.py` / `read_only_server.py` | Hidden local sign-in, private session, allowlisted HTTP, separate food-inspection MCP tools |
 | `server.py` | Standard SDK tools and assistant instructions; local stdio |
 
 The application is a single process, single user, and one writable SQLite database per instance. Use a local filesystem on one host; cross-host/network-filesystem locking and multi-user tenancy are not implemented. SQLite uses durable commits and a versioned schema. Its `fcntl` operation lock targets Linux/macOS.
@@ -17,10 +18,10 @@ The application is a single process, single user, and one writable SQLite databa
 ## Commands
 
 ```bash
-uv sync --locked --extra mcp --group dev
+uv sync --locked --extra mcp --extra live --group dev
 uv run --locked ruff check .
 uv run --locked ruff format --check .
-uv run --locked --extra mcp python -m unittest discover -s tests -v
+uv run --locked --extra mcp --extra live python -m unittest discover -s tests -v
 uv run --locked cronometer-assistant demo
 ```
 
@@ -56,3 +57,14 @@ The committed `uv.lock` was resolved in GitHub Actions because the initial local
 Runtime files are ignored by Git. The service creates its database with mode 0600 and new data directories with mode 0700. That does not replace disk encryption, authenticated remote access, or backup policy. Do not log raw tool requests, label photos, credentials, or sessions.
 
 No production deployment, public MCP endpoint, scheduled task, real-account credential, or live Cronometer write is configured. Before deployment, add authentication, session expiry handling, database backup/restore checks, and a tested rollback path. Store runtime data on a persistent volume; deploy immutable tested revisions. The repository intentionally contains no environment secrets.
+
+## Read-only account compatibility
+
+See [setup](cronometer-read-only.md). CI installs the pinned live extra and sets
+`REQUIRE_LIVE_TESTS=1`; real-client tests mock HTTP and use synthetic credentials.
+No real-account tests or secrets run in CI. Read-only mode has a separate tool
+surface and HTTP allowlist. The existing meal service still refuses real diary
+backends. Source-code mappings and food/measure fidelity remain unverified.
+
+Demo draft deletion is revision-checked and blocks any meal with a journal entry,
+including uncertain writes. It removes only the local draft, never diary entries.

@@ -231,6 +231,17 @@ class MealService:
         meal = self._meal(meal_id)
         return self.response(meal=meal, review=self._review(meal))
 
+    def delete_draft(self, meal_id: str, expected_revision: int) -> dict:
+        """Remove an unlogged draft; never erase the journal of a possible diary write."""
+        with self.store.locked():
+            meal = self._meal(meal_id)
+            if meal["revision"] != expected_revision:
+                raise ValidationError("Retrieve the current draft revision before deleting")
+            if self.store.get("operations", meal_id) is not None:
+                raise ValidationError("This meal has a logging operation; draft deletion is blocked")
+            self.store.delete("meals", meal_id)
+        return self.response(meal_id=meal_id, deleted=True, diary_entries_deleted=0)
+
     def propose_label(self, **kwargs) -> dict:
         return self.response(proposal=normalize_label(**kwargs), saved=False)
 

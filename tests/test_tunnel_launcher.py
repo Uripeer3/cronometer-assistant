@@ -15,6 +15,17 @@ spec.loader.exec_module(launcher)
 
 
 class TunnelLauncherTests(unittest.TestCase):
+    def test_read_only_mode_uses_separate_server_and_private_session(self):
+        args = launcher.launch_arguments(
+            Path("/client"), "tunnel_" + "a" * 32,
+            Path("/python"), Path("/some data/demo.sqlite"), mode="read-only",
+        )
+        child = shlex.split(args[args.index("--mcp.command") + 1])
+        self.assertIn("serve-read-only", child)
+        self.assertNotIn("serve", child)
+        self.assertNotIn("--db", child)
+        self.assertEqual(child[-1], "/some data/cronometer-session/session.json")
+
     def test_launch_command_handles_spaces_and_has_no_key_argument(self):
         args = launcher.launch_arguments(
             Path("/some client/tunnel-client"),
