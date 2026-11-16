@@ -209,9 +209,11 @@ class MealService:
 
     def _persist_operation(self, meal: dict, operation: dict, state: str):
         operation["state"] = state
-        self.store.put("operations", meal["meal_id"], operation)
         meal["state"] = state
-        self.store.put("meals", meal["meal_id"], meal)
+        self.store.put_many([
+            ("operations", meal["meal_id"], operation),
+            ("meals", meal["meal_id"], meal),
+        ])
 
     def commit_meal(self, meal_id: str, expected_revision: int) -> dict:
         with self.store.locked():

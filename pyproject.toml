@@ -17,6 +17,9 @@ dev = ["ruff==0.14.5"]
 requires = ["hatchling>=1.27,<2"]
 build-backend = "hatchling.build"
 
+[tool.hatch.metadata]
+allow-direct-references = true
+
 [project.scripts]
 cronometer-assistant = "cronometer_assistant.cli:main"
 
@@ -25,4 +28,4 @@ target-version = "py312"
 line-length = 100
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B"]
+select = ["E4", "E7", "E9", "F", "I", "UP", "B"]

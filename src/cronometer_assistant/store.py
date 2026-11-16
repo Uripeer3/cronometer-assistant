@@ -53,12 +53,17 @@ class Store:
         return json.loads(row[0]) if row else None
 
     def put(self, namespace: str, key: str, value: dict):
-        payload = json.dumps(value, ensure_ascii=False, allow_nan=False, sort_keys=True)
+        self.put_many([(namespace, key, value)])
+
+    def put_many(self, documents: list[tuple[str, str, dict]]):
+        rows = [(namespace, key,
+                 json.dumps(value, ensure_ascii=False, allow_nan=False, sort_keys=True))
+                for namespace, key, value in documents]
         with self.connection() as db:
-            db.execute(
+            db.executemany(
                 "INSERT INTO documents VALUES (?, ?, ?) "
                 "ON CONFLICT(namespace,key) DO UPDATE SET payload=excluded.payload",
-                (namespace, key, payload),
+                rows,
             )
 
     def values(self, namespace: str) -> list[dict]:
