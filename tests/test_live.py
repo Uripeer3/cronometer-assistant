@@ -76,7 +76,11 @@ class BoundaryTests(unittest.TestCase):
                     "id": fid,
                     "name": "Synthetic food",
                     "source": 77,
-                    "measures": [{"id": 4, "name": "portion", "value": 80}],
+                    "measures": [
+                        {"id": 4, "name": "portion", "type": "Weight", "value": 80, "amount": 1},
+                        {"id": 5, "name": "count", "type": "Atomic", "value": 80},
+                        {"id": 6, "name": "unknown", "value": 80},
+                    ],
                     "nutrients": [
                         {"id": 1, "amount": 0},
                         {"id": 2},
@@ -97,6 +101,8 @@ class BoundaryTests(unittest.TestCase):
         self.assertFalse(rows[1]["known"])
         self.assertEqual(rows[2]["unit"], "IU")
         self.assertEqual(result["measures"][0]["grams"], 80)
+        self.assertIsNone(result["measures"][1]["grams"])
+        self.assertIsNone(result["measures"][2]["grams"])
         self.assertFalse(result["source_verified"])
         self.assertNotIn("must-not-return", json.dumps(result))
         self.assertFalse(result["real_diary_changed"])
@@ -216,7 +222,9 @@ class PinnedClientTests(unittest.TestCase):
                 remote.update(deepcopy(payload["data"]))
                 remote["owner"] = 1
                 remote["id"] = 123
-                remote["measures"][0]["id"] = 456
+                for index, measure in enumerate(remote["measures"]):
+                    measure["id"] = 456 + index
+                remote["defaultMeasureId"] = 456
                 self.assertEqual(payload["auth"]["token"], "fake-token")
                 return self.httpx.Response(200, json={"id": 123})
             if request.url.path == "/api/v2/get_food":
@@ -229,7 +237,7 @@ class PinnedClientTests(unittest.TestCase):
         self.addCleanup(client._http.close)
         service = ProductService(Store(Path(self.temp.name) / "products.sqlite"), client)
         pid = service.prepare(
-            "Synthetic food", 100, "g", {"energy": {"amount": 200, "unit": "kcal"}}
+            "Synthetic food", 100, "g", {"energy": {"amount": 200, "unit": "kcal"}}, category_id=0
         )["product"]["proposal_id"]
         result = service.create(pid, True)
         self.assertTrue(result["created"])

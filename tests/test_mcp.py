@@ -159,6 +159,7 @@ class MCPTests(unittest.TestCase):
                     "basis_amount": 100,
                     "basis_unit": "g",
                     "nutrients": {"protein": {"amount": 10, "unit": "g"}},
+                    "category_id": 0,
                 },
             )
 

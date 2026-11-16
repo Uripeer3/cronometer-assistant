@@ -303,8 +303,17 @@ class ReadOnlyConnection:
             source_verified=False,
             preparation="unspecified",
             default_measure_id=raw.get("defaultMeasureId"),
+            category_id=raw.get("category"),
+            label_type=raw.get("labelType"),
             measures=[
-                {"measure_id": m.get("id"), "name": m.get("name"), "grams": m.get("value")}
+                {
+                    "measure_id": m.get("id"),
+                    "name": m.get("name"),
+                    "type": m.get("type"),
+                    "amount": m.get("amount"),
+                    "value": m.get("value"),
+                    "grams": m.get("value") if m.get("type") == "Weight" else None,
+                }
                 for m in raw.get("measures", [])
             ],
             nutrients_per_100g=nutrients,

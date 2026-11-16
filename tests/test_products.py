@@ -8,7 +8,7 @@ from copy import deepcopy
 from pathlib import Path
 
 from cronometer_assistant.catalog import CronometerReadOnlyCatalog
-from cronometer_assistant.live import LiveError, check_request
+from cronometer_assistant.live import LiveError, ReadOnlyConnection, check_request
 from cronometer_assistant.models import ValidationError
 from cronometer_assistant.nutrition import normalize_label
 from cronometer_assistant.products import ProductService
@@ -57,7 +57,9 @@ class FakeClient:
         raw = deepcopy(payload["data"])
         raw["id"] = 123
         raw["owner"] = self.user_id
-        raw["measures"][0]["id"] = 456
+        for index, measure in enumerate(raw["measures"]):
+            measure["id"] = 456 + index
+        raw["defaultMeasureId"] = 456
         self.foods[123] = raw
         if self.timeout_after_create:
             raise TimeoutError("synthetic-secret-never-persist")
@@ -178,6 +180,7 @@ class ProductTests(unittest.TestCase):
             nutrients or label_values(),
             carbohydrate_basis="excludes_fiber",
             serving_grams=25,
+            category_id=5,
         )["product"]["proposal_id"]
 
     def test_creation_readback_and_repeat_are_deduplicated_without_credentials(self):
@@ -211,6 +214,98 @@ class ProductTests(unittest.TestCase):
         self.assertEqual(self.client.adds, 1)
         self.assertTrue(restarted.reconcile(pid, 123)["created"])
         self.assertTrue(restarted.create(pid, True)["already_created"])
+
+    def test_weight_serving_supports_arbitrary_grams_and_matching_label_display(self):
+        pid = self.proposal()
+        self.assertTrue(self.service.create(pid, True)["created"])
+        raw = self.client.get_food(123)
+        self.assertEqual(raw["category"], 5)
+        self.assertEqual(raw["labelType"], "EU")
+        by_name = {m["name"]: m for m in raw["measures"]}
+        self.assertEqual(by_name["serving"]["type"], "Weight")
+        self.assertEqual(by_name["serving"]["value"], 25)
+        self.assertEqual(by_name["g"]["value"], 1)
+        inspected = ReadOnlyConnection(self.client).food("crono:123")
+        self.assertEqual(inspected["category_id"], 5)
+        self.assertEqual(inspected["measures"][0]["grams"], 25)
+        amounts = {n["id"]: n["amount"] for n in raw["nutrients"]}
+        self.assertEqual((amounts[205] - amounts[291]) * 0.25, 7.5)
+        self.assertEqual((amounts[205] - amounts[291] - amounts[10007]) * 0.25, 6)
+        # A 50 g portion is twice this 25 g serving, without integer-serving limits.
+        self.assertEqual(amounts[208] * 0.5, 160)
+        self.assertEqual(amounts[203] * 0.5, 12)
+
+    def test_missing_category_blocks_creation_and_can_be_completed_without_new_identity(self):
+        args = ("Synthetic Brand, Cereal", 100, "g", label_values())
+        first = self.service.prepare(*args, carbohydrate_basis="excludes_fiber")
+        pid = first["product"]["proposal_id"]
+        with self.assertRaisesRegex(ValidationError, "category_id"):
+            self.service.create(pid, True)
+        completed = self.service.prepare(*args, carbohydrate_basis="excludes_fiber", category_id=5)
+        self.assertEqual(pid, completed["product"]["proposal_id"])
+        self.assertTrue(self.service.create(pid, True)["created"])
+        self.assertEqual(self.client.adds, 1)
+        for category in (-1, True, 5.5):
+            with self.subTest(category=category), self.assertRaises(ValidationError):
+                self.service.prepare(*args, category_id=category)
+
+    def test_including_fiber_uses_american_label_without_changing_carbs(self):
+        pid = self.service.prepare(
+            "Synthetic Brand, US label",
+            100,
+            "g",
+            label_values(),
+            carbohydrate_basis="includes_fiber",
+            category_id=0,
+        )["product"]["proposal_id"]
+        self.assertTrue(self.service.create(pid, True)["created"])
+        raw = self.client.get_food(123)
+        self.assertEqual(raw["labelType"], "AMERICAN_2016")
+        self.assertEqual(next(n["amount"] for n in raw["nutrients"] if n["id"] == 205), 30)
+
+    def test_stale_created_record_and_unusable_measure_cannot_pass_verification(self):
+        mutations = {
+            "atomic_positive_value": lambda raw: raw["measures"][0].update(type="Atomic"),
+            "serving_counts_two": lambda raw: raw["measures"][0].update(amount=2),
+            "hidden_gram": lambda raw: raw["measures"][1].update(hidden=True),
+            "wrong_gram_weight": lambda raw: raw["measures"][1].update(value=2),
+            "missing_gram": lambda raw: raw["measures"].pop(),
+            "wrong_default": lambda raw: raw.update(defaultMeasureId=999),
+            "wrong_category": lambda raw: raw.update(category=0),
+            "wrong_label": lambda raw: raw.update(labelType="AMERICAN_2016"),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                pid = self.proposal()
+                product = self.store.get("product_proposals", pid)
+                product["state"] = "prepared"
+                product.pop("remote_food_id", None)
+                self.store.put("product_proposals", pid, product)
+                self.assertTrue(self.service.create(pid, True)["created"])
+                mutate(self.client.foods[123])
+                count = self.client.adds
+                result = self.service.create(pid, True)
+                self.assertFalse(result["created"])
+                self.assertEqual(result["product"]["state"], "needs_reconciliation")
+                self.assertFalse(result["remote_food_changed"])
+                self.assertEqual(self.client.adds, count)
+
+    def test_metadata_changes_never_create_a_second_food(self):
+        pid = self.proposal()
+        self.service.create(pid, True)
+        again = self.service.prepare(
+            "Synthetic Brand, Cocoa",
+            100,
+            "g",
+            label_values(),
+            carbohydrate_basis="excludes_fiber",
+            serving_grams=25,
+            category_id=0,
+        )
+        self.assertEqual(again["product"]["proposal_id"], pid)
+        self.assertEqual(again["product"]["category_id"], 5)
+        self.assertTrue(self.service.create(pid, True)["already_created"])
+        self.assertEqual(self.client.adds, 1)
 
     def test_crash_leaves_durable_marker(self):
         class Crash(BaseException):

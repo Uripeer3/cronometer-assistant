@@ -77,7 +77,10 @@ class ProductService:
         serving_grams: float = 100,
         barcode: str | None = None,
         density_g_per_ml: float | None = None,
+        category_id: int | None = None,
     ):
+        if category_id is not None and (type(category_id) is not int or category_id < 0):
+            raise ValidationError("category_id must be a non-negative Cronometer category ID")
         if barcode is not None:
             barcode = text(barcode, "barcode", 14)
             if not re.fullmatch(r"(?:[0-9]{8}|[0-9]{12,14})", barcode):
@@ -94,6 +97,8 @@ class ProductService:
             "label": label,
             "serving_grams": number(serving_grams, "serving grams", positive=True),
             "barcode": barcode,
+            "category_id": category_id,
+            "label_type": ("EU" if carbohydrate_basis == "excludes_fiber" else "AMERICAN_2016"),
         }
         identity = {
             "name": normalized(label["name"]),
@@ -110,12 +115,29 @@ class ProductService:
             if existing is None:
                 existing = {"proposal_id": digest, "state": "prepared", **proposal}
                 self.store.put("product_proposals", digest, existing)
+            elif existing["state"] == "prepared":
+                # Metadata may be completed before the first attempt. It must not create a
+                # second food identity or rewrite an already-sent request.
+                if category_id is not None:
+                    existing["category_id"] = category_id
+                existing.setdefault(
+                    "label_type",
+                    "EU"
+                    if existing["label"]["carbohydrate_basis"] == "excludes_fiber"
+                    else "AMERICAN_2016",
+                )
+                self.store.put("product_proposals", digest, existing)
         return self.response(existing, review_required=True, remote_food_changed=False)
 
     def review(self, proposal_id: str):
         return self.response(self._product(proposal_id), remote_food_changed=False)
 
     def _payload(self, product):
+        if product.get("category_id") is None:
+            raise ValidationError(
+                "Select a verified category_id before creation; use 0 only for an "
+                "explicitly uncategorized food"
+            )
         definitions = self.client.get_nutrient_definitions()
         rows = []
         for key, nutrient in product["label"]["nutrients_per_100g"].items():
@@ -135,7 +157,7 @@ class ProductService:
             "data": {
                 "id": 0,
                 "name": product["label"]["name"],
-                "category": 0,
+                "category": product["category_id"],
                 "owner": None,
                 "retired": None,
                 "source": None,
@@ -148,11 +170,12 @@ class ProductService:
                         "name": "serving",
                         "value": product["serving_grams"],
                         "amount": 1.0,
-                        "type": "Atomic",
-                    }
+                        "type": "Weight",
+                    },
+                    {"id": 0, "name": "g", "value": 1.0, "amount": 1.0, "type": "Weight"},
                 ],
                 # Raw nutrients already use total carbs including fiber.
-                "labelType": "AMERICAN_2016",
+                "labelType": product["label_type"],
                 "nutrients": rows,
                 "properties": {},
                 "foodTags": [],
@@ -168,6 +191,10 @@ class ProductService:
             return False
         if raw.get("owner") != self.client.user_id:
             return False
+        if raw.get("category") != payload["category"]:
+            return False
+        if raw.get("labelType") != payload["labelType"]:
+            return False
         amounts = {n.get("id"): n.get("amount") for n in raw.get("nutrients", [])}
         expected_ids = {n["id"] for n in payload["nutrients"]}
         if any(nid > 0 and nid not in expected_ids for nid in amounts if type(nid) is int):
@@ -178,15 +205,32 @@ class ProductService:
                 amount, row["amount"], rel_tol=1e-6, abs_tol=0.0001
             ):
                 return False
-        return any(
+        serving_matches = any(
             m.get("id")
+            and m.get("id") == raw.get("defaultMeasureId")
             and m.get("name") == "serving"
+            and m.get("type") == "Weight"
+            and not m.get("hidden", False)
+            and type(m.get("amount")) in (int, float)
+            and math.isclose(m["amount"], 1.0, abs_tol=1e-6)
             and type(m.get("value")) in (int, float)
             and math.isclose(m["value"], product["serving_grams"], abs_tol=1e-6)
             for m in raw.get("measures", [])
         )
+        grams_match = any(
+            m.get("id")
+            and m.get("name") == "g"
+            and m.get("type") == "Weight"
+            and not m.get("hidden", False)
+            and type(m.get("amount")) in (int, float)
+            and math.isclose(m["amount"], 1.0, abs_tol=1e-6)
+            and type(m.get("value")) in (int, float)
+            and math.isclose(m["value"], 1.0, abs_tol=1e-6)
+            for m in raw.get("measures", [])
+        )
+        return serving_matches and grams_match
 
-    def _verify(self, product):
+    def _verify(self, product, *, remote_food_changed=False):
         try:
             raw = self.client.get_food(product["remote_food_id"])
         except Exception:
@@ -203,7 +247,7 @@ class ProductService:
             created=product["state"] == "created",
             retry_blocked=product["state"] == "needs_reconciliation",
             barcode_linked=False,
-            remote_food_changed=True,
+            remote_food_changed=remote_food_changed,
         )
 
     def create(self, proposal_id: str, reviewed: bool):
@@ -213,13 +257,9 @@ class ProductService:
             product = self._product(proposal_id)
             self._check_unresolved(product)
             if product["state"] == "created":
-                return self.response(
-                    product,
-                    created=True,
-                    already_created=True,
-                    remote_food_changed=False,
-                    barcode_linked=False,
-                )
+                # Also recheck legacy records: a positive Atomic value is not a
+                # usable weight, and external edits must not get a stale success.
+                return {**self._verify(product), "already_created": True}
             if product["state"] in {"sending", "uncertain", "needs_reconciliation"}:
                 return self.response(
                     product, created=False, retry_blocked=True, remote_food_changed="unknown"
@@ -246,7 +286,7 @@ class ProductService:
             product["remote_food_id"] = food_id
             product["state"] = "needs_verification"
             self.store.put("product_proposals", proposal_id, product)
-            return self._verify(product)
+            return self._verify(product, remote_food_changed=True)
 
     def reconcile(self, proposal_id: str, food_id: int):
         if type(food_id) is not int or food_id <= 0:
