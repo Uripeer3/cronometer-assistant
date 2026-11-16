@@ -53,7 +53,8 @@ def run_demo(path: Path) -> dict:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "command", choices=["demo", "serve", "login", "check-cronometer", "serve-read-only", "serve-products"]
+        "command",
+        choices=["demo", "serve", "login", "check-cronometer", "serve-read-only", "serve-products"],
     )
     parser.add_argument("--db", type=Path, help="Persistent SQLite path (private runtime data)")
     parser.add_argument(
@@ -70,7 +71,8 @@ def main():
         try:
             connection = ReadOnlyConnection(
                 create_client(
-                    args.session, interactive=args.command == "login",
+                    args.session,
+                    interactive=args.command == "login",
                     allow_product_creation=args.command == "serve-products",
                 )
             )
@@ -86,7 +88,9 @@ def main():
                 if args.command == "serve-products":
                     from .products import ProductService
 
-                    products = ProductService(Store(args.db or Path("data/products.sqlite")), connection.client)
+                    products = ProductService(
+                        Store(args.db or Path("data/products.sqlite")), connection.client
+                    )
                 create_read_only_server(connection, product_service=products).run(transport="stdio")
         except (LiveError, ValidationError) as error:
             print(str(error), file=sys.stderr)  # Only our scrubbed diagnostics.

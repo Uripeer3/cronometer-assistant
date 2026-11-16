@@ -79,7 +79,9 @@ class LabelConventionTests(unittest.TestCase):
         self.assertEqual(p["nutrients_per_100g"]["sugar_alcohol"]["amount"], 6)
         self.assertEqual(p["nutrients_per_100g"]["energy"]["amount"], 320)
         already_total = normalize_label(
-            "Synthetic cereal", 100, "g",
+            "Synthetic cereal",
+            100,
+            "g",
             {"carbs": {"amount": 38, "unit": "g"}, "fiber": {"amount": 8, "unit": "g"}},
             carbohydrate_basis="includes_fiber",
         )
@@ -90,7 +92,10 @@ class LabelConventionTests(unittest.TestCase):
             normalize_label("test", 100, "g", label_values())
         with self.assertRaises(ValidationError):
             normalize_label(
-                "test", 100, "g", {"carbs": {"amount": 5, "unit": "g"}},
+                "test",
+                100,
+                "g",
+                {"carbs": {"amount": 5, "unit": "g"}},
                 carbohydrate_basis="excludes_fiber",
             )
         with self.assertRaises(ValidationError):
@@ -99,16 +104,22 @@ class LabelConventionTests(unittest.TestCase):
             normalize_label("test", 100, "g", [])
         with self.assertRaises(ValidationError):
             normalize_label(
-                "test", 100, "g",
+                "test",
+                100,
+                "g",
                 {"carbs": {"amount": 5, "unit": "g"}, "sugar_alcohol": {"amount": 10, "unit": "g"}},
                 carbohydrate_basis="includes_fiber",
             )
 
     def test_ius_and_micrograms_are_not_confused(self):
         p = normalize_label(
-            "Synthetic label", 100, "g",
-            {"cronometer_324": {"amount": 80, "unit": "IU"},
-             "cronometer_418": {"amount": 4, "unit": "µg"}},
+            "Synthetic label",
+            100,
+            "g",
+            {
+                "cronometer_324": {"amount": 80, "unit": "IU"},
+                "cronometer_418": {"amount": 4, "unit": "µg"},
+            },
         )
         self.assertEqual(p["nutrients_per_100g"]["cronometer_324"]["unit"], "IU")
         self.assertEqual(p["nutrients_per_100g"]["cronometer_418"]["unit"], "ug")
@@ -116,10 +127,14 @@ class LabelConventionTests(unittest.TestCase):
     def test_catalog_handles_iu_unclassified_and_computed_rows(self):
         client = FakeClient()
         client.foods[1] = {
-            "id": 1, "name": "Synthetic food", "source": "TEST:42",
+            "id": 1,
+            "name": "Synthetic food",
+            "source": "TEST:42",
             "nutrients": [
-                {"id": 324, "amount": 80}, {"id": -205, "amount": 99},
-                {"id": 999, "amount": 3}, {"id": 307, "amount": 0},
+                {"id": 324, "amount": 80},
+                {"id": -205, "amount": 99},
+                {"id": 999, "amount": 3},
+                {"id": 307, "amount": 0},
             ],
         }
         food = CronometerReadOnlyCatalog(client, source_map={"TEST": "USDA"}).get("crono:1")
@@ -133,8 +148,11 @@ class LabelConventionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             service = MealService(Store(Path(directory) / "demo.sqlite"))
             p = service.propose_label(
-                name="Synthetic cereal", basis_amount=100, basis_unit="g",
-                nutrients=label_values(), carbohydrate_basis="excludes_fiber",
+                name="Synthetic cereal",
+                basis_amount=100,
+                basis_unit="g",
+                nutrients=label_values(),
+                carbohydrate_basis="excludes_fiber",
             )["proposal"]
             first = service.save_label_product(p, "usual", True)["food"]
             second = service.save_label_product(p, "usual", True)["food"]
@@ -152,8 +170,12 @@ class ProductTests(unittest.TestCase):
 
     def proposal(self, nutrients=None):
         return self.service.prepare(
-            "Synthetic Brand, Cocoa", 100, "g", nutrients or label_values(),
-            carbohydrate_basis="excludes_fiber", serving_grams=25,
+            "Synthetic Brand, Cocoa",
+            100,
+            "g",
+            nutrients or label_values(),
+            carbohydrate_basis="excludes_fiber",
+            serving_grams=25,
         )["product"]["proposal_id"]
 
     def test_creation_readback_and_repeat_are_deduplicated_without_credentials(self):
@@ -193,9 +215,11 @@ class ProductTests(unittest.TestCase):
             pass
 
         original = self.client._request
+
         def crash(endpoint, payload):
             original(endpoint, payload)
             raise Crash
+
         self.client._request = crash
         pid = self.proposal()
         with self.assertRaises(Crash):
@@ -257,12 +281,12 @@ class ProductTests(unittest.TestCase):
             self.service.prepare("x", 100, "g", label_values(), barcode="not-a-code")
 
     def test_http_guard_is_opt_in_and_cannot_edit_or_log(self):
-        check_request("POST", "/api/v2/add_food", {"data": {"id": 0}},
-                      allow_product_creation=True)
+        check_request("POST", "/api/v2/add_food", {"data": {"id": 0}}, allow_product_creation=True)
         for data in ({"id": 123}, {"id": True}, {"id": 0, "meal": {"ingredients": [1]}}):
             with self.assertRaises(LiveError):
-                check_request("POST", "/api/v2/add_food", {"data": data},
-                              allow_product_creation=True)
+                check_request(
+                    "POST", "/api/v2/add_food", {"data": data}, allow_product_creation=True
+                )
         with self.assertRaises(LiveError):
             check_request("POST", "/api/v2/add_food", {"data": {"id": 0}})
         with self.assertRaises(LiveError):

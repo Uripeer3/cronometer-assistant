@@ -160,8 +160,11 @@ def launch_arguments(
     )
     if mode == "products":
         server_args = [
-            "serve-products", "--db", str(database.parent / "products.sqlite"),
-            "--session", str(database.parent / "cronometer-session/session.json"),
+            "serve-products",
+            "--db",
+            str(database.parent / "products.sqlite"),
+            "--session",
+            str(database.parent / "cronometer-session/session.json"),
         ]
     command = shlex.join(
         [

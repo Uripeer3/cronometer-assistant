@@ -11,9 +11,17 @@ from .nutrition import normalize_label
 from .store import Store
 
 NUTRIENT_IDS = {
-    "energy": 208, "protein": 203, "fat": 204, "carbs": 205, "fiber": 291,
-    "sugars": 269, "sugar_alcohol": 10007, "sodium": 307,
-    "saturated_fat": 606, "trans_fat": 605, "cholesterol": 601,
+    "energy": 208,
+    "protein": 203,
+    "fat": 204,
+    "carbs": 205,
+    "fiber": 291,
+    "sugars": 269,
+    "sugar_alcohol": 10007,
+    "sodium": 307,
+    "saturated_fat": 606,
+    "trans_fat": 605,
+    "cholesterol": 601,
 }
 
 
@@ -30,9 +38,11 @@ class ProductService:
     @staticmethod
     def response(product=None, **data):
         # Internal request payloads are never tool results.
-        public = {} if product is None else {"product": {
-            k: v for k, v in product.items() if k != "payload"
-        }}
+        public = (
+            {}
+            if product is None
+            else {"product": {k: v for k, v in product.items() if k != "payload"}}
+        )
         return {"mode": "cronometer_products", "real_diary_changed": False, **public, **data}
 
     def _product(self, proposal_id):
@@ -42,16 +52,26 @@ class ProductService:
         return value
 
     def prepare(
-        self, name: str, basis_amount: float, basis_unit: str, nutrients: dict,
-        carbohydrate_basis: str = "unspecified", serving_grams: float = 100,
-        barcode: str | None = None, density_g_per_ml: float | None = None,
+        self,
+        name: str,
+        basis_amount: float,
+        basis_unit: str,
+        nutrients: dict,
+        carbohydrate_basis: str = "unspecified",
+        serving_grams: float = 100,
+        barcode: str | None = None,
+        density_g_per_ml: float | None = None,
     ):
         if barcode is not None:
             barcode = text(barcode, "barcode", 14)
             if not re.fullmatch(r"(?:[0-9]{8}|[0-9]{12,14})", barcode):
                 raise ValidationError("Barcode must contain 8, 12, 13 or 14 digits")
         label = normalize_label(
-            name, basis_amount, basis_unit, nutrients, density_g_per_ml,
+            name,
+            basis_amount,
+            basis_unit,
+            nutrients,
+            density_g_per_ml,
             carbohydrate_basis=carbohydrate_basis,
         )
         proposal = {
@@ -88,17 +108,29 @@ class ProductService:
             raise ValidationError("At least one known, mapped nutrient is required")
         return {
             "data": {
-                "id": 0, "name": product["label"]["name"], "category": 0,
-                "owner": None, "retired": None, "source": None,
-                "defaultMeasureId": 0, "alternateId": None,
+                "id": 0,
+                "name": product["label"]["name"],
+                "category": 0,
+                "owner": None,
+                "retired": None,
+                "source": None,
+                "defaultMeasureId": 0,
+                "alternateId": None,
                 "comments": "cronometer-assistant product:" + product["proposal_id"],
-                "measures": [{
-                    "id": 0, "name": "serving", "value": product["serving_grams"],
-                    "amount": 1.0, "type": "Atomic",
-                }],
+                "measures": [
+                    {
+                        "id": 0,
+                        "name": "serving",
+                        "value": product["serving_grams"],
+                        "amount": 1.0,
+                        "type": "Atomic",
+                    }
+                ],
                 # Raw nutrients already use total carbs including fiber.
-                "labelType": "AMERICAN_2016", "nutrients": rows,
-                "properties": {}, "foodTags": [],
+                "labelType": "AMERICAN_2016",
+                "nutrients": rows,
+                "properties": {},
+                "foodTags": [],
             },
             "config": {"call_version": 1},
         }
@@ -122,7 +154,8 @@ class ProductService:
             ):
                 return False
         return any(
-            m.get("id") and m.get("name") == "serving"
+            m.get("id")
+            and m.get("name") == "serving"
             and type(m.get("value")) in (int, float)
             and math.isclose(m["value"], product["serving_grams"], abs_tol=1e-6)
             for m in raw.get("measures", [])
@@ -141,9 +174,11 @@ class ProductService:
             product["state"] = "created" if matches else "needs_reconciliation"
         self.store.put("product_proposals", product["proposal_id"], product)
         return self.response(
-            product, created=product["state"] == "created",
+            product,
+            created=product["state"] == "created",
             retry_blocked=product["state"] == "needs_reconciliation",
-            barcode_linked=False, remote_food_changed=True,
+            barcode_linked=False,
+            remote_food_changed=True,
         )
 
     def create(self, proposal_id: str, reviewed: bool):
@@ -153,8 +188,11 @@ class ProductService:
             product = self._product(proposal_id)
             if product["state"] == "created":
                 return self.response(
-                    product, created=True, already_created=True,
-                    remote_food_changed=False, barcode_linked=False,
+                    product,
+                    created=True,
+                    already_created=True,
+                    remote_food_changed=False,
+                    barcode_linked=False,
                 )
             if product["state"] in {"sending", "uncertain", "needs_reconciliation"}:
                 return self.response(
@@ -169,9 +207,7 @@ class ProductService:
             try:
                 # Upstream _request mutates its argument to insert auth. Isolate that copy:
                 # no session token may reach SQLite, tool results, or stored proposals.
-                response = self.client._request(
-                    "/api/v2/add_food", deepcopy(product["payload"])
-                )
+                response = self.client._request("/api/v2/add_food", deepcopy(product["payload"]))
                 food_id = response.get("id")
                 if type(food_id) is not int or food_id <= 0:
                     raise ValueError
@@ -192,7 +228,10 @@ class ProductService:
         with self.store.locked():
             product = self._product(proposal_id)
             if product["state"] not in {
-                "sending", "uncertain", "needs_verification", "needs_reconciliation"
+                "sending",
+                "uncertain",
+                "needs_verification",
+                "needs_reconciliation",
             }:
                 raise ValidationError("This product does not need reconciliation")
             raw = self.client.get_food(food_id)
@@ -202,13 +241,20 @@ class ProductService:
                 )
             product["remote_food_id"], product["state"] = food_id, "created"
             self.store.put("product_proposals", proposal_id, product)
-            return self.response(product, created=True, remote_food_changed=False, barcode_linked=False)
+            return self.response(
+                product, created=True, remote_food_changed=False, barcode_linked=False
+            )
 
     def public_submission_checklist(self, proposal_id: str):
         return self.response(
-            self._product(proposal_id), submitted=False, public=False,
+            self._product(proposal_id),
+            submitted=False,
+            public=False,
             requirements=[
-                "Verified private food", "Barcode", "Package-front photo", "Nutrition-label photo"
+                "Verified private food",
+                "Barcode",
+                "Package-front photo",
+                "Nutrition-label photo",
             ],
             next_step="Use Cronometer's Publish Food flow; automated submission is not implemented",
         )

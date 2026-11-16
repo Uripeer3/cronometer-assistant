@@ -120,8 +120,11 @@ class SessionFile:
 
 
 def create_client(
-    session_path: Path, *, interactive: bool = False,
-    allow_product_creation: bool = False, transport=None,
+    session_path: Path,
+    *,
+    interactive: bool = False,
+    allow_product_creation: bool = False,
+    transport=None,
 ):
     try:
         import httpx

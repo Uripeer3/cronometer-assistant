@@ -205,12 +205,13 @@ class PinnedClientTests(unittest.TestCase):
 
         SessionFile(self.path).write(1, "fake-token", "Asia/Jerusalem")
         remote = {}
+
         def handler(request):
             payload = json.loads(request.content)
             if request.url.path == "/api/v2/get_nutrients":
-                return self.httpx.Response(200, json={
-                    "nutrients": [{"id": 208, "name": "Energy", "unit": "kcal"}]
-                })
+                return self.httpx.Response(
+                    200, json={"nutrients": [{"id": 208, "name": "Energy", "unit": "kcal"}]}
+                )
             if request.url.path == "/api/v2/add_food":
                 remote.update(deepcopy(payload["data"]))
                 remote["owner"] = 1
@@ -221,6 +222,7 @@ class PinnedClientTests(unittest.TestCase):
             if request.url.path == "/api/v2/get_food":
                 return self.httpx.Response(200, json=remote)
             raise AssertionError("Unexpected endpoint")
+
         client = create_client(
             self.path, allow_product_creation=True, transport=self.httpx.MockTransport(handler)
         )

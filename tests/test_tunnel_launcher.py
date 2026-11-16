@@ -17,8 +17,11 @@ spec.loader.exec_module(launcher)
 class TunnelLauncherTests(unittest.TestCase):
     def test_product_mode_uses_its_own_database_and_explicit_command(self):
         args = launcher.launch_arguments(
-            Path("/client"), "tunnel_" + "a" * 32,
-            Path("/python"), Path("/data/demo.sqlite"), mode="products",
+            Path("/client"),
+            "tunnel_" + "a" * 32,
+            Path("/python"),
+            Path("/data/demo.sqlite"),
+            mode="products",
         )
         child = shlex.split(args[args.index("--mcp.command") + 1])
         self.assertIn("serve-products", child)

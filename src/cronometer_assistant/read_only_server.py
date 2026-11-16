@@ -8,7 +8,9 @@ def create_read_only_server(connection: ReadOnlyConnection, *, product_service=N
     from mcp.server.fastmcp import FastMCP
 
     server = FastMCP(
-        "Cronometer private products" if product_service else "Cronometer food inspection — READ ONLY",
+        "Cronometer private products"
+        if product_service
+        else "Cronometer food inspection — READ ONLY",
         instructions=(
             "Speak Hebrew or English according to the user. This connection only inspects "
             "real Cronometer food data. It cannot log/delete diary entries. "
@@ -22,7 +24,8 @@ def create_read_only_server(connection: ReadOnlyConnection, *, product_service=N
                 "the same proposal against its marked remote food. Barcode is local metadata only: "
                 "never claim app barcode scanning works. The public checklist does not submit or "
                 "publish anything; guide the documented manual flow when requested. "
-                if product_service else "It cannot create drafts or save products. "
+                if product_service
+                else "It cannot create drafts or save products. "
             )
             + "Never claim an unsupported action succeeded. Search and inspect returned "
             "food IDs. If Hebrew search fails, try an English translation. Source codes and "
@@ -39,7 +42,10 @@ def create_read_only_server(connection: ReadOnlyConnection, *, product_service=N
         except (LiveError, ValidationError) as error:
             return {"ok": False, **(product_service or connection).response(error=str(error))}
         except Exception:
-            return {"ok": False, **(product_service or connection).response(error="Unexpected food-data response")}
+            return {
+                "ok": False,
+                **(product_service or connection).response(error="Unexpected food-data response"),
+            }
 
     @server.tool(annotations={"readOnlyHint": True})
     def check_cronometer_connection() -> dict:
@@ -56,13 +62,18 @@ def create_read_only_server(connection: ReadOnlyConnection, *, product_service=N
         """Inspect measures and raw nutrient amounts; no missing-to-zero conversion."""
         return call(connection.food, food_id)
 
-
     if product_service is not None:
+
         @server.tool(annotations={"readOnlyHint": False, "destructiveHint": False})
         def prepare_cronometer_product(
-            name: str, basis_amount: float, basis_unit: str, nutrients: dict,
-            carbohydrate_basis: str = "unspecified", serving_grams: float = 100,
-            barcode: str | None = None, density_g_per_ml: float | None = None,
+            name: str,
+            basis_amount: float,
+            basis_unit: str,
+            nutrients: dict,
+            carbohydrate_basis: str = "unspecified",
+            serving_grams: float = 100,
+            barcode: str | None = None,
+            density_g_per_ml: float | None = None,
         ) -> dict:
             """Prepare a private proposal, not a remote food. Nutrient rows need amount/unit.
 
@@ -70,10 +81,15 @@ def create_read_only_server(connection: ReadOnlyConnection, *, product_service=N
             or excludes_fiber; both include polyols. Barcode is stored locally only.
             """
             return call(
-                product_service.prepare, name=name, basis_amount=basis_amount,
-                basis_unit=basis_unit, nutrients=nutrients,
-                carbohydrate_basis=carbohydrate_basis, serving_grams=serving_grams,
-                barcode=barcode, density_g_per_ml=density_g_per_ml,
+                product_service.prepare,
+                name=name,
+                basis_amount=basis_amount,
+                basis_unit=basis_unit,
+                nutrients=nutrients,
+                carbohydrate_basis=carbohydrate_basis,
+                serving_grams=serving_grams,
+                barcode=barcode,
+                density_g_per_ml=density_g_per_ml,
             )
 
         @server.tool(annotations={"readOnlyHint": True})
@@ -81,9 +97,9 @@ def create_read_only_server(connection: ReadOnlyConnection, *, product_service=N
             """Review the exact private-food proposal and creation status."""
             return call(product_service.review, proposal_id)
 
-        @server.tool(annotations={
-            "readOnlyHint": False, "destructiveHint": False, "idempotentHint": True
-        })
+        @server.tool(
+            annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True}
+        )
         def create_verified_cronometer_food(proposal_id: str, reviewed: bool) -> dict:
             """Create a NEW private food after user review; never edits a food or diary.
 
