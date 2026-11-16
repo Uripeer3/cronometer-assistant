@@ -103,8 +103,11 @@ def normalize_label(
     return {
         "name": name,
         "basis_grams": basis,
-        "label_basis": {"amount": original_basis, "unit": basis_unit,
-                        "density_g_per_ml": density_g_per_ml},
+        "label_basis": {
+            "amount": original_basis,
+            "unit": basis_unit,
+            "density_g_per_ml": density_g_per_ml,
+        },
         "label_fields": {key: dict(row) for key, row in nutrients.items()},
         "conversion_notes": notes,
         "carbohydrate_basis": carbohydrate_basis,

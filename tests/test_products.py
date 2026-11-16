@@ -312,14 +312,21 @@ class ProductTests(unittest.TestCase):
         included = label_values()
         included["carbs"]["amount"] = 38
         second = self.service.prepare(
-            "Synthetic Brand, Cocoa", 100, "g", included,
-            carbohydrate_basis="includes_fiber", serving_grams=25,
+            "Synthetic Brand, Cocoa",
+            100,
+            "g",
+            included,
+            carbohydrate_basis="includes_fiber",
+            serving_grams=25,
         )["product"]["proposal_id"]
         self.assertEqual(first, second)
 
     def test_original_label_basis_and_units_survive_normalization(self):
         result = normalize_label(
-            "Synthetic liquid", 50, "ml", {"energy": {"amount": 418.4, "unit": "kJ"}},
+            "Synthetic liquid",
+            50,
+            "ml",
+            {"energy": {"amount": 418.4, "unit": "kJ"}},
             density_g_per_ml=1.1,
         )
         self.assertEqual(result["label_basis"]["unit"], "ml")

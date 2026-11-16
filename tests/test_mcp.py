@@ -161,6 +161,7 @@ class MCPTests(unittest.TestCase):
                     "nutrients": {"protein": {"amount": 10, "unit": "g"}},
                 },
             )
+
             def payload(value):
                 if isinstance(value, tuple):
                     return value[1]

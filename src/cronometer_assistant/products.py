@@ -58,7 +58,10 @@ class ProductService:
             same_name = normalized(other["label"]["name"]) == normalized(product["label"]["name"])
             same_barcode = product["barcode"] and product["barcode"] == other["barcode"]
             if (same_name or same_barcode) and other["state"] in {
-                "sending", "uncertain", "needs_verification", "needs_reconciliation"
+                "sending",
+                "uncertain",
+                "needs_verification",
+                "needs_reconciliation",
             }:
                 raise ValidationError(
                     "Resolve the existing uncertain creation first: " + other["proposal_id"]
