@@ -1,5 +1,10 @@
 # Complete PR map and acceptance tests
 
+**Scope update:** this is a simple personal utility. The delivery priorities below
+supersede the old numeric order. The numbered feature tables remain a complete
+backlog, not a requirement to build every item before using it. See the
+[scope review and hosting comparison](personal-scope.md).
+
 Updated 17 November 2026. PRs #1–#6 provide the merged baseline: conversational
 demo drafts, tunnel setup, protected local authentication, real-food inspection,
 and reviewed private-food creation with serving/category/label-display fixes.
@@ -9,6 +14,28 @@ checks do not replace the live acceptance tests in the table. PRs **15–35 are
 planned slots, not existing GitHub PRs or reserved issue numbers**. Split or
 renumber them if implementation or testing reveals a better boundary. Implementation
 lives in each respective PR branch; updating PR #8's documentation enables no new tools.
+
+## Personal-use delivery priorities
+
+| Priority | Small useful milestone | Existing/planned work to reuse | Simple acceptance |
+|---|---|---|---|
+| A | Run away from the laptop | Early phone check from 32; bring basic hosting from 33 forward | Put the laptop to sleep and call one tool through the existing tunnel on the chosen machine |
+| B | Log, correct and undo ordinary meals | Representative fidelity from 15; diary work 23–27 grouped coherently | Log a weighed food, correct its amount, undo it, and repeat a request without duplication |
+| C | Reuse products and read labels easily | Existing 9–12; photo delivery/barcodes 16–17 as useful | Reuse the usual food without repeating questions; extract a label and save the right serving |
+| D | Handle batch cooking | Combine 28–29 into a small recipe/yield feature | Save a batch, eat a fraction and keep the previous recipe version unchanged |
+| Optional | Native photo uploads, automatic public submission and rare food administration | 18–22, driven by actual need | Use manual Publish Food or the app editor until automation saves more effort than it costs |
+
+Basic auto-restart, a private data folder, one backup/restore command and readable
+logs are enough to start. Slot 34 is basic maintainability, not a production
+operations programme; slot 35 becomes a short personal-use trial. Keep one
+user-facing mode, one SQLite database and ordinary files. Retain correctness and
+write recovery, but do not expose every internal validation as a user question.
+
+Removing photo **storage/upload** is an optional simplification, not yet a change
+to the requested retention behavior. The assistant can still read a label image
+and send extracted nutrients to the service. Without archiving, images will not
+be retained by our backend. This does not make GitHub/GitLab Pages able to run
+the Python service or remove the tunnel's need for a running process.
 
 ## Implemented: review and test before merging
 
@@ -60,13 +87,13 @@ lives in each respective PR branch; updating PR #8's documentation enables no ne
 
 | Planned PR | What to implement | What needs testing | Simple test cases / expected result |
 |---|---|---|---|
-| 33 | Always-on authenticated deployment and supervised runtime | Reachability while laptop sleeps, persistent data, restart/health checks and protected access | Put the laptop to sleep and use the chosen phone host successfully. Restart the service: drafts/journals/photos remain. An unauthorized client cannot access tools. Choose hosting only after phone compatibility is established. |
+| 33 | Always-on authenticated deployment and supervised runtime | Reachability while laptop sleeps, persistent data, restart/health checks and protected access | Put the laptop to sleep and use the chosen phone host successfully. Restart the service: drafts/journals/photos remain. An unauthorized client cannot access tools. Do an early phone-tool check, then deploy the small existing service; do not wait for all backlog features. |
 | 34 | Operational recovery, migrations and release process | Session expiry, privacy-preserving diagnostics, protected backup location/retention, schema upgrades, restore and rollback | Expire a session: guide local reauthentication without logging credentials. Restore a selected backup and roll back a deployment without losing journals or replaying uncertain writes. Verify credentials remain outside data bundles. |
 | 35 | End-to-end pilot and release acceptance | Several days of real meals, all agreed flows, reconciliation with the app and acceptable friction | Exercise generic food, exact product, missing product/photos, submission decline/request, recipe portion, correction, undo, restart and mobile voice. Compare entries/totals with Cronometer, record problems, and resolve them before calling the system ready for daily use. |
 
 ## Dependencies and merge process
 
-Review #7–#14 in order. They currently form a stack: #7 targets main and each
+Review the open #7–#14 stack before deploying its changes. They currently form a stack: #7 targets main and each
 subsequent PR targets the previous branch. Merge a reviewed parent, retarget/rebase
 its child onto the resulting main revision, and rerun CI before merging the child.
 A squash merge requires rebasing the remaining stack; do not assume a changed

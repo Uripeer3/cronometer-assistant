@@ -2,6 +2,24 @@
 
 Prepared 16 November 2026. Status: conversational prototype, real-account food lookup, and a controlled private-food creation have been exercised. Live UI review exposed serving-type, category and label-display gaps; creation fixes are merged. Automatic photo intake/archive and public-upload integration remain pending. Live diary writes, automated existing-food corrections and public-food submission are not yet implemented.
 
+## Scope correction: personal utility
+
+The user wants a small home/personal tool: simple flow, easy fixes and minimal
+maintenance. The complete PR table is a backlog, not a commercial-product plan.
+Use the [personal scope review](personal-scope.md) and the new priority section in
+[the PR map](pr-map.md) to order delivery: early basic deployment; ordinary meal
+logging/correction/undo; useful product/label support; then batch recipes.
+Automatic public submission and rare food administration may use the app first.
+Keep short write journals, read-back, units and unknown nutrients correct; avoid
+enterprise infrastructure and repeated technical approvals.
+
+A server-owned secret/session file is sufficient for this single user. Current
+interactive login already retains a session; optional credential-file re-login
+is possible but not implemented. Host prices/free limits and GitHub/GitLab Pages
+constraints are documented in the review. Removing server photo storage would
+not stop the assistant reading a nutrition photo, but would change the previously
+requested retention behavior and needs an explicit choice before implementation.
+
 ## Goal and agreed preferences
 
 Speak naturally while preparing or eating meals, answer a few useful follow-up questions, and have the assistant record the food in Cronometer using appropriate database entries. Repeated meals should become progressively easier to log.
