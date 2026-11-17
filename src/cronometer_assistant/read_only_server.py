@@ -188,4 +188,24 @@ def create_read_only_server(connection: ReadOnlyConnection, *, product_service=N
                 receipt,
             )
 
+        from .repairs import ProductRepairs
+
+        repairs = ProductRepairs(product_service)
+
+        @server.tool(annotations={"readOnlyHint": False, "destructiveHint": False})
+        def prepare_product_repair(
+            proposal_id: str, category_id: int, serving_grams: float
+        ) -> dict:
+            """Snapshot the same private food for a manual usability repair; no remote edit.
+
+            Correct it in the app if needed, then prepare a fresh matching snapshot.
+            Nutrients must still match the reviewed label.
+            """
+            return call(repairs.prepare, proposal_id, category_id, serving_grams)
+
+        @server.tool(annotations={"readOnlyHint": False, "destructiveHint": False})
+        def adopt_manual_product_repair(repair_id: str, reviewed: bool) -> dict:
+            """Re-read and adopt a matching reviewed repair locally; no remote writes."""
+            return call(repairs.adopt, repair_id, reviewed)
+
     return server

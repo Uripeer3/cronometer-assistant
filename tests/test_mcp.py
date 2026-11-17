@@ -224,3 +224,47 @@ class MCPTests(unittest.TestCase):
             self.assertFalse(checklist["should_offer_submission"])
             self.assertFalse(checklist["submitted"])
             self.assertEqual(client.adds, 1)
+
+    def test_repair_surface_rechecks_the_same_food(self):
+        asyncio.run(self.repair_surface())
+
+    async def repair_surface(self):
+        from test_products import FakeClient, label_values
+
+        from cronometer_assistant.live import ReadOnlyConnection
+        from cronometer_assistant.products import ProductService
+        from cronometer_assistant.read_only_server import create_read_only_server
+        from cronometer_assistant.store import Store
+
+        with tempfile.TemporaryDirectory() as directory:
+            client = FakeClient()
+            service = ProductService(Store(Path(directory) / "products.sqlite"), client)
+            pid = service.prepare(
+                "Synthetic cereal",
+                100,
+                "g",
+                label_values(),
+                carbohydrate_basis="excludes_fiber",
+                category_id=0,
+            )["product"]["proposal_id"]
+            service.create(pid, True)
+            server = create_read_only_server(ReadOnlyConnection(client), product_service=service)
+
+            def payload(result):
+                return result[1] if isinstance(result, tuple) else json.loads(result[0].text)
+
+            review = payload(
+                await server.call_tool(
+                    "prepare_product_repair",
+                    {"proposal_id": pid, "category_id": 0, "serving_grams": 100},
+                )
+            )
+            adopted = payload(
+                await server.call_tool(
+                    "adopt_manual_product_repair",
+                    {"repair_id": review["repair_id"], "reviewed": True},
+                )
+            )
+            self.assertTrue(adopted["adopted"])
+            self.assertFalse(adopted["remote_food_changed"])
+            self.assertEqual(client.adds, 1)

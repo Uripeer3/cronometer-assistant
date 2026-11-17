@@ -117,6 +117,31 @@ class ProductService:
             self._check_unresolved({"proposal_id": digest, **proposal})
             existing = self.store.get("product_proposals", digest)
             if existing is None:
+                # Manual repair/later barcode capture must not duplicate a known product.
+                matches = [
+                    p
+                    for p in self.store.values("product_proposals")
+                    if p["state"] == "created"
+                    and normalized(p["label"]["name"]) == identity["name"]
+                    and p["serving_grams"] == proposal["serving_grams"]
+                    and {
+                        k: v
+                        for k, v in p["label"]["nutrients_per_100g"].items()
+                        if v["amount"] is not None
+                    }
+                    == identity["nutrients"]
+                    and (
+                        barcode is None
+                        or barcode in {p.get("barcode"), p.get("submission_barcode")}
+                    )
+                ]
+                if len(matches) > 1:
+                    raise ValidationError(
+                        "Several saved versions match; select the existing proposal"
+                    )
+                if matches:
+                    existing = matches[0]
+            if existing is None:
                 existing = {"proposal_id": digest, "state": "prepared", **proposal}
                 self.store.put("product_proposals", digest, existing)
             elif existing["state"] == "prepared":
