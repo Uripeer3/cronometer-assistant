@@ -62,6 +62,9 @@ def main():
             "serve-read-only",
             "serve-products",
             "serve-drafts",
+            "backup-runtime",
+            "verify-backup",
+            "restore-runtime",
         ],
     )
     parser.add_argument("--db", type=Path, help="Persistent SQLite path (private runtime data)")
@@ -72,7 +75,37 @@ def main():
         help="Private local Cronometer session; never a password file",
     )
     parser.add_argument("--evidence-inbox", type=Path, help="Private host-managed image inbox")
+    parser.add_argument(
+        "--backup-dir", type=Path, help="New private backup or existing verified backup"
+    )
+    parser.add_argument("--restore-dir", type=Path, help="New isolated restore directory")
     args = parser.parse_args()
+    if args.command in {"backup-runtime", "verify-backup", "restore-runtime"}:
+        from .backups import create_backup, restore_backup, verify_backup
+
+        try:
+            if args.backup_dir is None:
+                raise ValidationError("Provide --backup-dir")
+            if args.command == "backup-runtime":
+                if args.db is None or args.db.is_symlink() or not args.db.is_file():
+                    raise ValidationError(
+                        "Provide --db pointing to an existing application database"
+                    )
+                result = create_backup(Store(args.db), args.backup_dir)
+            elif args.command == "verify-backup":
+                result = verify_backup(args.backup_dir)
+            else:
+                if args.restore_dir is None:
+                    raise ValidationError("Provide a new --restore-dir")
+                result = restore_backup(args.backup_dir, args.restore_dir)
+            print(json.dumps(result, indent=2))
+        except (OSError, ValueError, RuntimeError):
+            print(
+                "Backup operation failed; check private paths, integrity and destination availability.",
+                file=sys.stderr,
+            )
+            raise SystemExit(1) from None
+        return
     if args.command in {
         "login",
         "check-cronometer",
