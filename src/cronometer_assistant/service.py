@@ -6,7 +6,7 @@ from datetime import date, datetime
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-from .backend import DemoDiary, DiaryBackend
+from .backend import DemoDiary, DiaryBackend, NoDiary
 from .catalog import Catalog, DemoCatalog, rank_foods
 from .models import DiaryEntry, Food, MealItem, ValidationError, normalized, text
 from .nutrition import normalize_label, summarize
@@ -23,17 +23,24 @@ class MealService:
         catalog: Catalog | None = None,
         diary: DiaryBackend | None = None,
         timezone: str = "Asia/Jerusalem",
+        draft_only: bool = False,
     ):
         self.store = store
         self.catalog = catalog or DemoCatalog(store)
-        self.diary = diary or DemoDiary(store)
+        self.draft_only = draft_only
+        self.diary = diary or (NoDiary() if draft_only else DemoDiary(store))
         self.timezone = ZoneInfo(timezone)
         # The write path deliberately cannot be enabled against a real diary in this milestone.
-        if self.diary.mode != "demo":
+        if self.diary.mode != ("unavailable" if draft_only else "demo"):
             raise ValidationError("Real diary writes are not implemented in this milestone")
 
     def response(self, **data) -> dict:
-        return {"mode": "demo", "real_diary_changed": False, **data}
+        return {
+            "mode": "cronometer_drafts" if self.draft_only else "demo",
+            "real_diary_changed": False,
+            "logging_supported": not self.draft_only,
+            **data,
+        }
 
     def _meal(self, meal_id: str) -> dict:
         meal = self.store.get("meals", meal_id)
@@ -222,7 +229,8 @@ class MealService:
             "suggested_next_questions": questions[:2],
             "entries": entries,
             "nutrients": nutrients,
-            "ready_to_log": not questions and meal["intent"] == "eaten",
+            "ready_to_log": not self.draft_only and not questions and meal["intent"] == "eaten",
+            "draft_complete": not questions and meal["intent"] == "eaten",
             "consumption_confirmation_needed": meal["intent"] != "eaten",
             "estimated_items": [
                 i for i, row in enumerate(meal["items"]) if row["quantity_basis"] != "weighed"
@@ -317,6 +325,8 @@ class MealService:
         )
 
     def commit_meal(self, meal_id: str, expected_revision: int) -> dict:
+        if self.draft_only:
+            raise ValidationError("This mode saves local drafts only; diary writes are unavailable")
         with self.store.locked():
             meal = self._meal(meal_id)
             if expected_revision != meal["revision"]:
@@ -386,6 +396,8 @@ class MealService:
 
     def reconcile_entry(self, meal_id: str, item_index: int, entry_id: str) -> dict:
         """Explicitly associate an uncertain write with a verified, newly created entry."""
+        if self.draft_only:
+            raise ValidationError("Draft-only mode has no diary operations to reconcile")
         with self.store.locked():
             meal = self._meal(meal_id)
             operation = self.store.get("operations", meal_id)
@@ -418,6 +430,8 @@ class MealService:
 
     def status(self, meal_id: str) -> dict:
         meal = self._meal(meal_id)
+        if self.draft_only:
+            return self.response(meal=meal, operation=None, diary_status="not_accessed")
         return self.response(
             meal=meal,
             operation=self.store.get("operations", meal_id),

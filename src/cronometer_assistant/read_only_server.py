@@ -4,13 +4,19 @@ from .live import LiveError, ReadOnlyConnection
 from .models import ValidationError
 
 
-def create_read_only_server(connection: ReadOnlyConnection, *, product_service=None):
+def create_read_only_server(
+    connection: ReadOnlyConnection, *, product_service=None, draft_service=None
+):
     from mcp.server.fastmcp import FastMCP
 
     server = FastMCP(
         "Cronometer private products"
         if product_service
-        else "Cronometer food inspection — READ ONLY",
+        else (
+            "Cronometer local meal drafts"
+            if draft_service
+            else "Cronometer food inspection — READ ONLY"
+        ),
         instructions=(
             "Speak Hebrew or English according to the user. This connection only inspects "
             "real Cronometer food data. It cannot log/delete diary entries. "
@@ -36,7 +42,21 @@ def create_read_only_server(connection: ReadOnlyConnection, *, product_service=N
                 "Only say photos were filed "
                 "when the host provides a durable file reference or verified archive result. "
                 if product_service
-                else "It cannot create drafts or save products. "
+                else (
+                    "It cannot save products. "
+                    if draft_service
+                    else "It cannot create drafts or save products. "
+                )
+            )
+            + (
+                " Local draft tools use real food data and account timezone, never write any diary. "
+                "Verify exact food identity, preparation and per-100-g basis before use. "
+                "Ask one or two useful questions, including dry/cooked weights and oils. "
+                "Preserve unresolved questions; estimates need user agreement and assumptions. "
+                "Cooking stays preparing; eaten requires actual consumption. Report saved as a "
+                "local draft, never logged. Remember aliases only when the user establishes a usual product. "
+                if draft_service
+                else ""
             )
             + "Never claim an unsupported action succeeded. Search and inspect returned "
             "food IDs. If Hebrew search fails, try an English translation. Source codes and "
@@ -52,11 +72,16 @@ def create_read_only_server(connection: ReadOnlyConnection, *, product_service=N
         try:
             return {"ok": True, **function(*args, **kwargs)}
         except (LiveError, ValidationError) as error:
-            return {"ok": False, **(product_service or connection).response(error=str(error))}
+            return {
+                "ok": False,
+                **(product_service or draft_service or connection).response(error=str(error)),
+            }
         except Exception:
             return {
                 "ok": False,
-                **(product_service or connection).response(error="Unexpected food-data response"),
+                **(product_service or draft_service or connection).response(
+                    error="Unexpected food-data response"
+                ),
             }
 
     @server.tool(annotations={"readOnlyHint": True})
@@ -207,5 +232,10 @@ def create_read_only_server(connection: ReadOnlyConnection, *, product_service=N
         def adopt_manual_product_repair(repair_id: str, reviewed: bool) -> dict:
             """Re-read and adopt a matching reviewed repair locally; no remote writes."""
             return call(repairs.adopt, repair_id, reviewed)
+
+    if draft_service is not None:
+        from .draft_tools import register_draft_tools
+
+        register_draft_tools(server, draft_service, call)
 
     return server

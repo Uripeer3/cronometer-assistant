@@ -28,3 +28,13 @@ class DemoDiary:
         entry = DiaryEntry("demo-entry:" + uuid4().hex, food_id, grams, day, meal_group)
         self.store.put("demo_diary", entry.entry_id, entry.to_dict())
         return entry
+
+
+class NoDiary:
+    mode = "unavailable"
+
+    def entries(self, day):
+        raise RuntimeError("Diary access is unavailable in draft-only mode")
+
+    def add(self, **kwargs):
+        raise RuntimeError("Diary writes are unavailable in draft-only mode")

@@ -149,8 +149,8 @@ def launch_arguments(
     client: Path, tunnel_id: str, python: Path, database: Path, *, mode: str = "demo"
 ) -> list[str]:
     validate_tunnel_id(tunnel_id)
-    if mode not in {"demo", "read-only", "products"}:
-        raise ValueError("mode must be demo, read-only, or products")
+    if mode not in {"demo", "read-only", "products", "drafts"}:
+        raise ValueError("mode must be demo, read-only, products or drafts")
     server_args = (
         ["serve", "--db", str(database)]
         if mode == "demo"
@@ -160,11 +160,11 @@ def launch_arguments(
             str(database.parent / "cronometer-session/session.json"),
         ]
     )
-    if mode == "products":
+    if mode in {"products", "drafts"}:
         server_args = [
-            "serve-products",
+            "serve-products" if mode == "products" else "serve-drafts",
             "--db",
-            str(database.parent / "products.sqlite"),
+            str(database.parent / ("products.sqlite" if mode == "products" else "drafts.sqlite")),
             "--session",
             str(database.parent / "cronometer-session/session.json"),
         ]
@@ -193,7 +193,9 @@ def launch_arguments(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tunnel-id", required=True, type=validate_tunnel_id)
-    parser.add_argument("--mode", choices=["demo", "read-only", "products"], default="demo")
+    parser.add_argument(
+        "--mode", choices=["demo", "read-only", "products", "drafts"], default="demo"
+    )
     parser.add_argument(
         "--save-key",
         action="store_true",

@@ -132,3 +132,16 @@ class TunnelLauncherTests(unittest.TestCase):
             )
             self.assertEqual(destination.read_bytes(), b"test executable")
             self.assertEqual(list(Path(folder).rglob("*")), [destination.parent, destination])
+
+    def test_draft_mode_uses_separate_database_without_creation(self):
+        args = launcher.launch_arguments(
+            Path("/client"),
+            "tunnel_" + "a" * 32,
+            Path("/python"),
+            Path("/data/demo.sqlite"),
+            mode="drafts",
+        )
+        child = shlex.split(args[args.index("--mcp.command") + 1])
+        self.assertIn("serve-drafts", child)
+        self.assertNotIn("serve-products", child)
+        self.assertEqual(child[child.index("--db") + 1], "/data/drafts.sqlite")

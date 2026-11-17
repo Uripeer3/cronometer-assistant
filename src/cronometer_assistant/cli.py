@@ -54,7 +54,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "command",
-        choices=["demo", "serve", "login", "check-cronometer", "serve-read-only", "serve-products"],
+        choices=[
+            "demo",
+            "serve",
+            "login",
+            "check-cronometer",
+            "serve-read-only",
+            "serve-products",
+            "serve-drafts",
+        ],
     )
     parser.add_argument("--db", type=Path, help="Persistent SQLite path (private runtime data)")
     parser.add_argument(
@@ -65,7 +73,13 @@ def main():
     )
     parser.add_argument("--evidence-inbox", type=Path, help="Private host-managed image inbox")
     args = parser.parse_args()
-    if args.command in {"login", "check-cronometer", "serve-read-only", "serve-products"}:
+    if args.command in {
+        "login",
+        "check-cronometer",
+        "serve-read-only",
+        "serve-products",
+        "serve-drafts",
+    }:
         from .live import LiveError, ReadOnlyConnection, create_client
 
         connection = None
@@ -94,7 +108,20 @@ def main():
                         connection.client,
                         evidence_inbox=args.evidence_inbox,
                     )
-                create_read_only_server(connection, product_service=products).run(transport="stdio")
+                drafts = None
+                if args.command in {"serve-drafts", "serve-products"}:
+                    from .live_drafts import LiveDraftService
+
+                    drafts = LiveDraftService(
+                        Store(
+                            args.db
+                            or Path("data/products.sqlite" if products else "data/drafts.sqlite")
+                        ),
+                        connection.client,
+                    )
+                create_read_only_server(
+                    connection, product_service=products, draft_service=drafts
+                ).run(transport="stdio")
         except (LiveError, ValidationError) as error:
             print(str(error), file=sys.stderr)  # Only our scrubbed diagnostics.
             raise SystemExit(1) from None

@@ -77,3 +77,28 @@ class Store:
     def delete(self, namespace: str, key: str):
         with self.connection() as db:
             db.execute("DELETE FROM documents WHERE namespace=? AND key=?", (namespace, key))
+
+
+class ScopedStore:
+    """Share one database/lock while separating real drafts from demo documents."""
+
+    def __init__(self, store: Store, prefix: str):
+        self.store, self.prefix, self.path = store, prefix, store.path
+
+    def locked(self):
+        return self.store.locked()
+
+    def get(self, namespace, key):
+        return self.store.get(self.prefix + namespace, key)
+
+    def put(self, namespace, key, value):
+        self.store.put(self.prefix + namespace, key, value)
+
+    def put_many(self, documents):
+        self.store.put_many([(self.prefix + ns, key, value) for ns, key, value in documents])
+
+    def values(self, namespace):
+        return self.store.values(self.prefix + namespace)
+
+    def delete(self, namespace, key):
+        self.store.delete(self.prefix + namespace, key)

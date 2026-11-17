@@ -268,3 +268,75 @@ class MCPTests(unittest.TestCase):
             self.assertTrue(adopted["adopted"])
             self.assertFalse(adopted["remote_food_changed"])
             self.assertEqual(client.adds, 1)
+
+    def test_live_draft_stdio_round_trip(self):
+        if importlib.util.find_spec("mcp") is None:
+            if os.environ.get("REQUIRE_MCP_TESTS") == "1":
+                self.fail("MCP SDK is required")
+            self.skipTest("MCP SDK not installed")
+        asyncio.run(self.live_draft_round_trip())
+
+    async def live_draft_round_trip(self):
+        from mcp import ClientSession, StdioServerParameters
+        from mcp.client.stdio import stdio_client
+
+        def payload(result):
+            self.assertFalse(result.isError)
+            return result.structuredContent or json.loads(result.content[0].text)
+
+        with tempfile.TemporaryDirectory() as directory:
+            code = (
+                "import sys; from pathlib import Path; "
+                f"sys.path.insert(0, {str(Path(__file__).parent.resolve())!r}); "
+                "from test_live_drafts import DraftClient; "
+                "from cronometer_assistant.live import ReadOnlyConnection; "
+                "from cronometer_assistant.live_drafts import LiveDraftService; "
+                "from cronometer_assistant.read_only_server import create_read_only_server; "
+                "from cronometer_assistant.store import Store; client=DraftClient(); "
+                f"service=LiveDraftService(Store(Path({directory!r})/'test.sqlite'),client); "
+                "create_read_only_server(ReadOnlyConnection(client),draft_service=service).run(transport='stdio')"
+            )
+            async with stdio_client(
+                StdioServerParameters(command=sys.executable, args=["-c", code])
+            ) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    names = {t.name for t in (await session.list_tools()).tools}
+                    self.assertNotIn("commit_meal", names)
+                    verified = payload(
+                        await session.call_tool(
+                            "verify_food_for_draft",
+                            {
+                                "food_id": "crono:5",
+                                "preparation": "cooked",
+                                "reviewed": True,
+                                "per_100g_confirmed": True,
+                            },
+                        )
+                    )
+                    self.assertTrue(verified["verified_for_drafts"])
+                    meal = payload(await session.call_tool("begin_meal", {"title": "אורז / rice"}))[
+                        "meal"
+                    ]
+                    result = payload(
+                        await session.call_tool(
+                            "update_meal_draft",
+                            {
+                                "meal_id": meal["meal_id"],
+                                "expected_revision": 0,
+                                "intent": "eaten",
+                                "items": [
+                                    {
+                                        "description": "אורז",
+                                        "food_id": "crono:5",
+                                        "grams": 100,
+                                        "preparation": "cooked",
+                                    }
+                                ],
+                            },
+                        )
+                    )
+                    self.assertEqual(result["review"]["nutrients"]["energy"]["known_amount"], 120)
+                    self.assertTrue(result["review"]["draft_complete"])
+                    self.assertFalse(result["review"]["ready_to_log"])
+                    self.assertFalse(result["real_diary_changed"])
