@@ -226,6 +226,10 @@ class MCPTests(unittest.TestCase):
             self.assertEqual(client.adds, 1)
 
     def test_repair_surface_rechecks_the_same_food(self):
+        if importlib.util.find_spec("mcp") is None:
+            if os.environ.get("REQUIRE_MCP_TESTS") == "1":
+                self.fail("MCP SDK is required")
+            self.skipTest("MCP SDK not installed")
         asyncio.run(self.repair_surface())
 
     async def repair_surface(self):
@@ -297,7 +301,7 @@ class MCPTests(unittest.TestCase):
                 "create_read_only_server(ReadOnlyConnection(client),draft_service=service).run(transport='stdio')"
             )
             async with stdio_client(
-                StdioServerParameters(command=sys.executable, args=["-c", code])
+                StdioServerParameters(command=sys.executable, args=["-c", code], env={**os.environ})
             ) as (read, write):
                 async with ClientSession(read, write) as session:
                     await session.initialize()

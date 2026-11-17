@@ -85,3 +85,16 @@ submission tool is a checklist, not a submission API. A controlled private-food 
 tests use synthetic data and do not create real foods.
 
 See the [development PR map](docs/pr-map.md) for the next review and test sequence.
+
+
+## Open development batch
+
+The [PR map](docs/pr-map.md) links the unmerged implementation stack and morning
+checks. New feature branches add private photo evidence, submission choices,
+manual-repair reconciliation, real-food local drafts and backup/restore. These
+are not deployed capabilities until reviewed, tested and merged.
+
+After merging the stack, use [product evidence](docs/product-evidence.md),
+[manual repairs](docs/product-repairs.md), [real-food drafts](docs/live-drafts.md)
+and [backup/restore](docs/backups.md). Real diary writes and automatic public
+submission remain subsequent milestones.

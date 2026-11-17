@@ -8,12 +8,12 @@ The morning tests below are required before deploying the corresponding capabili
 | Order | Branch / PR | Deliverable | Morning acceptance |
 |---|---|---|---|
 | 0 | `codex/product-photo-evidence` / #7 | Photo retention and optional-submission policy | Confirm the intended ask-once interaction |
-| 1 | `codex/development-pr-map` | This plan and accurate capability documentation | Review sequence and scope |
-| 2 | `codex/private-product-evidence` | Durable evidence references, bounded private image import, hashes, deduplication and review tools | Import a front/label pair, restart, verify bytes and roles; decline publication and retain both |
-| 3 | `codex/submission-journal` | Revision-checked publication choice, validated barcode, readiness and manual-submission receipts | A requested submission resumes without another approval; declining makes no upload; no receipt means no submitted claim |
-| 4 | `codex/product-repair-review` | Snapshot-based review and reconciliation of manual corrections to the same private food | Detect changes, preview the corrected state, adopt only an exact re-read; never create a replacement |
-| 5 | `codex/live-meal-drafts` | Local meal drafts using actual food data, account timezone and source-aware aliases | Hebrew/English preparation questions, weighed portions and persistence; no simulated or real diary write tools in this mode |
-| 6 | `codex/runtime-backups` | Consistent SQLite backup, evidence copying, integrity verification and restore drill | Restore into an isolated directory and recover drafts, evidence and submission choices |
+| 1 | `codex/development-pr-map` / [#8](https://github.com/Uripeer3/cronometer-assistant/pull/8) | This plan and accurate capability documentation | Review sequence and scope |
+| 2 | `codex/private-product-evidence` / [#9](https://github.com/Uripeer3/cronometer-assistant/pull/9) | Durable evidence references, bounded private image import, hashes, deduplication and review tools | Import a front/label pair, restart, verify bytes and roles; decline publication and retain both |
+| 3 | `codex/submission-journal` / [#10](https://github.com/Uripeer3/cronometer-assistant/pull/10) | Revision-checked publication choice, validated barcode, readiness and manual-submission receipts | A requested submission resumes without another approval; declining makes no upload; no receipt means no submitted claim |
+| 4 | `codex/product-repair-review` / [#11](https://github.com/Uripeer3/cronometer-assistant/pull/11) | Snapshot-based review and reconciliation of manual corrections to the same private food | Detect changes, preview the corrected state, adopt only an exact re-read; never create a replacement |
+| 5 | `codex/live-meal-drafts` / [#12](https://github.com/Uripeer3/cronometer-assistant/pull/12) | Local meal drafts using actual food data, account timezone and source-aware aliases | Hebrew/English preparation questions, weighed portions and persistence; no simulated or real diary write tools in this mode |
+| 6 | `codex/runtime-backups` / [#13](https://github.com/Uripeer3/cronometer-assistant/pull/13) | Consistent SQLite backup, evidence copying, integrity verification and restore drill | Restore into an isolated directory and recover drafts, evidence and submission choices |
 
 ## One complete product, optional submission
 
@@ -60,3 +60,12 @@ Next slices, after these are tested:
 
 Tests use synthetic fixtures, mocked HTTP and real MCP SDK boundaries. Real photos,
 barcodes, catalog payloads, account identifiers and sessions stay outside Git.
+
+## Batch implementation status
+
+The six slices above are implemented in open stacked PRs, not merged or deployed.
+The follow-up integration branch `codex/pilot-integration` wires the evidence inbox
+through the launcher, handles transient release downloads, scopes CI release API
+credentials to a non-redirecting metadata request, and reconciles documentation.
+Run the morning checks in order. A green synthetic suite is not a live food,
+barcode, photo-upload, diary-write or mobile-voice acceptance result.

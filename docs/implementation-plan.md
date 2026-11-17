@@ -221,6 +221,21 @@ High-value validation scenarios: dry/cooked rice; exact Israeli dairy product; H
 
 Suggested pilot targets, to calibrate with use rather than guarantee: familiar meals usually need no product questions; an ordinary unfamiliar meal needs at most one or two clarification turns; label capture is a one-time cost per product/version; every write has a verifiable result. Measure time, questions, screen taps, incorrect matches, duplicate entries, and connection failures. Record uncertainty instead of promising laboratory accuracy.
 
+## Open implementation batch (17 November 2026)
+
+The [PR map](pr-map.md) records the dependency order and morning acceptance checks.
+Open PRs #8–#13 implement the map, private evidence import/review, persisted
+submission choices and manual outcomes, snapshot-based adoption of manual food
+repairs, real-food local drafts, and consistent backup/isolated restore. These
+remain feature-branch implementations, awaiting individual live review and merge.
+
+The deployed/main capabilities described above are unchanged until deployment.
+There is still no automatic transfer of chat attachments into the configured
+inbox, native barcode write, automatic Cronometer photo upload/public submission,
+remote food-edit tool or real diary write. Manual food repair adoption changes our
+local journal only. Operator-reported submission receipts are not independently
+verified API results. Preserve these distinctions during morning testing.
+
 ## Immediate next implementation task
 
 Deploy the merged custom-food usability fixes and complete their live acceptance checks. Add durable photo intake/evidence review and the one-time submission-choice journal, then the reviewed existing-food correction workflow above. Keep the current creation-only transport boundary until that narrowly scoped edit path is implemented and tested. Public-submission preparation may follow user review, but direct upload/submission support remains unimplemented.

@@ -1,11 +1,14 @@
 import hashlib
 import importlib.util
 import io
+import os
 import shlex
 import tempfile
 import unittest
+import urllib.error
 import zipfile
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 spec = importlib.util.spec_from_file_location(
     "connect_demo", Path(__file__).resolve().parents[1] / "scripts/connect_demo.py"
@@ -145,3 +148,83 @@ class TunnelLauncherTests(unittest.TestCase):
         self.assertIn("serve-drafts", child)
         self.assertNotIn("serve-products", child)
         self.assertEqual(child[child.index("--db") + 1], "/data/drafts.sqlite")
+
+    def test_inbox_is_forwarded_only_for_products_and_paths_are_shell_quoted(self):
+        args = launcher.launch_arguments(
+            Path("/client"),
+            "tunnel_" + "a" * 32,
+            Path("/python"),
+            Path("/data/demo.sqlite"),
+            mode="products",
+            evidence_inbox=Path("/private/photo inbox"),
+        )
+        child = shlex.split(args[args.index("--mcp.command") + 1])
+        self.assertEqual(child[child.index("--evidence-inbox") + 1], "/private/photo inbox")
+        with self.assertRaises(ValueError):
+            launcher.launch_arguments(
+                Path("/client"),
+                "tunnel_" + "a" * 32,
+                Path("/python"),
+                Path("/data/demo.sqlite"),
+                mode="drafts",
+                evidence_inbox=Path("/private/inbox"),
+            )
+
+    def test_release_token_never_reaches_asset_downloads_and_refuses_redirects(self):
+        metadata_requests, asset_requests = [], []
+
+        def metadata(request, **kwargs):
+            metadata_requests.append(request)
+            return io.BytesIO(b"metadata")
+
+        def asset(request, **kwargs):
+            asset_requests.append(request)
+            return io.BytesIO(b"archive")
+
+        opener = Mock()
+        opener.open.side_effect = metadata
+        with (
+            patch.dict(os.environ, {"TUNNEL_RELEASE_API_TOKEN": "synthetic-ci-token"}),
+            patch.object(launcher.urllib.request, "build_opener", return_value=opener) as build,
+            patch.object(launcher.urllib.request, "urlopen", side_effect=asset),
+        ):
+            self.assertEqual(launcher.read_public_url(launcher.RELEASE_API, 100), b"metadata")
+            self.assertEqual(
+                launcher.read_public_url(launcher.ASSET_PREFIX + "asset", 100), b"archive"
+            )
+            self.assertEqual(
+                metadata_requests[0].get_header("Authorization"), "Bearer synthetic-ci-token"
+            )
+            self.assertIsNone(asset_requests[0].get_header("Authorization"))
+            handler = build.call_args.args[0]
+            with self.assertRaises(urllib.error.URLError):
+                handler.redirect_request(
+                    metadata_requests[0], None, 302, "redirect", {}, "https://other.example/"
+                )
+
+    def test_download_retries_transient_failures_and_enforces_bound(self):
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch.object(launcher.time, "sleep") as pause,
+            patch.object(
+                launcher.urllib.request, "urlopen", side_effect=[TimeoutError(), io.BytesIO(b"ok")]
+            ) as download,
+        ):
+            self.assertEqual(launcher.read_public_url(launcher.ASSET_PREFIX + "asset", 2), b"ok")
+            self.assertEqual(download.call_count, 2)
+            self.assertEqual(pause.call_count, 1)
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch.object(launcher.time, "sleep"),
+            patch.object(
+                launcher.urllib.request, "urlopen", side_effect=TimeoutError()
+            ) as download,
+        ):
+            with self.assertRaises(TimeoutError):
+                launcher.read_public_url(launcher.ASSET_PREFIX + "asset", 2)
+            self.assertEqual(download.call_count, 3)
+        with patch.object(
+            launcher.urllib.request, "urlopen", return_value=io.BytesIO(b"oversized")
+        ):
+            with self.assertRaises(ValueError):
+                launcher.read_public_url(launcher.ASSET_PREFIX + "asset", 2)
