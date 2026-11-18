@@ -8,6 +8,7 @@ import getpass
 import json
 import logging
 import os
+import re
 import stat
 import sys
 import tempfile
@@ -17,6 +18,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from .models import ValidationError, number, text
 
 READ_ENDPOINTS = frozenset({"/api/v2/find_food", "/api/v2/get_food", "/api/v2/get_nutrients"})
+DIARY_READ_ENDPOINTS = frozenset({"/api/v2/get_diary", "/api/v2/get_nutrition_scores"})
 
 
 class LiveError(Exception):
@@ -28,7 +30,12 @@ class LoginRequired(LiveError):
 
 
 def check_request(
-    method: str, url: str, payload: dict | None, *, allow_product_creation: bool = False
+    method: str,
+    url: str,
+    payload: dict | None,
+    *,
+    allow_product_creation: bool = False,
+    diary_account: int | None = None,
 ):
     """Fail closed before HTTP, including accidental calls to upstream write methods."""
     if url == "/api/v2/add_food" and method.upper() == "POST" and allow_product_creation:
@@ -38,12 +45,66 @@ def check_request(
         if data.get("meal") or data.get("ingredients"):
             raise LiveError("Recipe creation is not enabled in product mode")
         return
-    if method.upper() != "POST" or url not in READ_ENDPOINTS | {"/api/v2/login"}:
+    method = method.upper()
+    if diary_account is not None:
+        if method == "POST" and url in DIARY_READ_ENDPOINTS:
+            return
+        if method == "POST" and url in {"/api/v2/add_serving", "/api/v2/edit_serving"}:
+            row = payload.get("serving") if isinstance(payload, dict) else None
+            if not _authorized_diary_serving(row, diary_account):
+                raise LiveError("Diary writes require an owned food serving with date and group")
+            if url.endswith("add_serving") and (
+                row.get("servingId") is not None
+                or row["order"] >> 16 not in (1, 2, 3, 4)
+                or not isinstance(row.get("time"), str)
+                or not re.fullmatch(r"[0-9]{1,2}:[0-9]{1,2}:[0-9]{1,2}", row["time"])
+                or type(row.get("translationId")) is not int
+                or row["translationId"] < 0
+            ):
+                raise LiveError("A new serving requires a supported meal group")
+            if url.endswith("edit_serving") and not _positive_id(row.get("servingId")):
+                raise LiveError("Serving edit requires the existing entry ID")
+            return
+        if method == "DELETE" and url == f"/api/v3/user/{diary_account}/diary-entries":
+            rows = payload.get("diaryEntries") if isinstance(payload, dict) else None
+            if (
+                not isinstance(rows, list)
+                or len(rows) != 1
+                or not _authorized_diary_serving(rows[0], diary_account)
+                or not _positive_id(rows[0].get("servingId"))
+                or rows[0].get("id") != rows[0]["servingId"]
+            ):
+                raise LiveError("Diary delete requires one owned serving and its exact entry ID")
+            return
+    if method != "POST" or url not in READ_ENDPOINTS | {"/api/v2/login"}:
         raise LiveError("This connection permits only authentication and food reads")
     if url == "/api/v2/login" and (
         not isinstance(payload, dict) or payload.get("timezone", "missing") is not None
     ):
         raise LiveError("Login must leave the account timezone unchanged")
+
+
+def _positive_id(value):
+    return type(value) is int and value > 0
+
+
+def _authorized_diary_serving(row, account):
+    if not isinstance(row, dict) or (
+        row.get("type") != "Serving"
+        or type(row.get("userId")) is not int
+        or row["userId"] != account
+        or not _positive_id(row.get("foodId"))
+        or not _positive_id(row.get("measureId"))
+        or type(row.get("order")) is not int
+        or not isinstance(row.get("day"), str)
+        or not re.fullmatch(r"[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}", row["day"])
+    ):
+        return False
+    try:
+        number(row.get("grams"), "serving grams", positive=True)
+    except ValidationError:
+        return False
+    return True
 
 
 def account_timezone(value: object) -> str:
@@ -124,6 +185,7 @@ def create_client(
     *,
     interactive: bool = False,
     allow_product_creation: bool = False,
+    allow_diary: bool = False,
     transport=None,
 ):
     try:
@@ -144,11 +206,21 @@ def create_client(
     class RestrictedHTTP(httpx.Client):
         def request(self, method, url, **kwargs):
             check_request(
-                method, str(url), kwargs.get("json"), allow_product_creation=allow_product_creation
+                method,
+                str(url),
+                kwargs.get("json"),
+                allow_product_creation=allow_product_creation,
+                diary_account=client._user_id if allow_diary else None,
             )
             return super().request(method, url, **kwargs)
 
     class LocalSessionClient(CronometerClient):
+        def _recipe_entry_units(self, food_id):
+            units = super()._recipe_entry_units(food_id)
+            if allow_diary and units is not None:
+                raise LiveError("Recipe serving writes are not enabled")
+            return units
+
         def _load_cached_session(self):
             if interactive:
                 return  # An explicit sign-in always uses the account entered now.
@@ -263,6 +335,7 @@ class ReadOnlyConnection:
                     "source_code": row.get("source"),
                     "source_verified": False,
                     "measure_id": row.get("measureId"),
+                    "translation_id": row.get("translationId") or 0,
                     "measure_name": row.get("measureDisplayName"),
                 }
                 for row in rows[:limit]

@@ -1,24 +1,49 @@
-"""Register only local-draft capabilities; never expose simulated/live diary writes."""
+"""Register local draft tools shared by real-food draft and logging modes."""
 
 
 def register_draft_tools(server, service, call):
     @server.tool(annotations={"readOnlyHint": False, "destructiveHint": False})
     def verify_food_for_draft(
-        food_id: str, preparation: str, reviewed: bool, per_100g_confirmed: bool
+        food_id: str,
+        preparation: str,
+        reviewed: bool,
+        per_100g_confirmed: bool,
+        translation_id: int = 0,
+        search_query: str | None = None,
     ) -> dict:
         """Retain an inspected food after exact identity/preparation/basis review.
 
         Never infer per_100g_confirmed from a tool field name alone. Confirm it
-        against the app/label. Changed profiles require review again.
+        against the app/label. Changed profiles require review again. For a search
+        match, pass its original query and translation_id along with the food ID.
         """
-        return call(service.verify_food, food_id, preparation, reviewed, per_100g_confirmed)
+        return call(
+            service.verify_food,
+            food_id,
+            preparation,
+            reviewed,
+            per_100g_confirmed,
+            translation_id,
+            search_query,
+        )
 
     @server.tool(annotations={"readOnlyHint": False, "destructiveHint": False})
     def begin_meal(
-        title: str, day: str | None = None, meal_group: str = "lunch", intent: str = "preparing"
+        title: str,
+        day: str | None = None,
+        meal_group: str = "lunch",
+        intent: str = "preparing",
+        local_time: str | None = None,
     ) -> dict:
-        """Create a LOCAL draft using account timezone. No diary write occurs."""
-        return call(service.begin_meal, title, day=day, meal_group=meal_group, intent=intent)
+        """Create a local draft. Pass an explicit YYYY-MM-DD and HH:MM when known."""
+        return call(
+            service.begin_meal,
+            title,
+            day=day,
+            meal_group=meal_group,
+            intent=intent,
+            local_time=local_time,
+        )
 
     @server.tool(annotations={"readOnlyHint": True})
     def resolve_food(
@@ -36,6 +61,9 @@ def register_draft_tools(server, service, call):
         items: list[dict],
         pending_questions: list[str] | None = None,
         intent: str | None = None,
+        day: str | None = None,
+        meal_group: str | None = None,
+        local_time: str | None = None,
     ) -> dict:
         """Replace the full LOCAL draft, preserving unanswered questions and estimate assumptions."""
         return call(
@@ -45,6 +73,9 @@ def register_draft_tools(server, service, call):
             items=items,
             pending_questions=pending_questions,
             intent=intent,
+            day=day,
+            meal_group=meal_group,
+            local_time=local_time,
         )
 
     @server.tool(annotations={"readOnlyHint": True})
