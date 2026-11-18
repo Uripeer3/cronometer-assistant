@@ -2,6 +2,24 @@
 
 Prepared 16 November 2026. Status: conversational prototype, real-account food lookup, and a controlled private-food creation have been exercised. Live UI review exposed serving-type, category and label-display gaps; creation fixes are merged. Automatic photo intake/archive and public-upload integration remain pending. Live diary writes, automated existing-food corrections and public-food submission are not yet implemented.
 
+## Scope correction: personal utility
+
+The user wants a small home/personal tool: simple flow, easy fixes and minimal
+maintenance. The complete PR table is a backlog, not a commercial-product plan.
+Use the [personal scope review](personal-scope.md) and the new priority section in
+[the PR map](pr-map.md) to order delivery: early basic deployment; ordinary meal
+logging/correction/undo; useful product/label support; then batch recipes.
+Automatic public submission and rare food administration may use the app first.
+Keep short write journals, read-back, units and unknown nutrients correct; avoid
+enterprise infrastructure and repeated technical approvals.
+
+A server-owned secret/session file is sufficient for this single user. Current
+interactive login already retains a session; optional credential-file re-login
+is possible but not implemented. Host prices/free limits and GitHub/GitLab Pages
+constraints are documented in the review. Removing server photo storage would
+not stop the assistant reading a nutrition photo, but would change the previously
+requested retention behavior and needs an explicit choice before implementation.
+
 ## Goal and agreed preferences
 
 Speak naturally while preparing or eating meals, answer a few useful follow-up questions, and have the assistant record the food in Cronometer using appropriate database entries. Repeated meals should become progressively easier to log.
@@ -235,6 +253,22 @@ inbox, native barcode write, automatic Cronometer photo upload/public submission
 remote food-edit tool or real diary write. Manual food repair adoption changes our
 local journal only. Operator-reported submission receipts are not independently
 verified API results. Preserve these distinctions during morning testing.
+
+## Complete follow-on PR map
+
+The [complete PR map](pr-map.md) lists the delivered work, what to test, and simple
+acceptance cases for each open PR #7–#14. Planned slots 15–35 cover all remaining
+agreed work: data/source/category/serving fidelity, automatic photo delivery,
+native barcode and photo handling, public submission/status, guarded edits and
+custom-food retirement/deletion, diary reads/writes/recovery/correction/undo,
+versioned recipes and yield portions, lower-friction dialogue, MCP compatibility,
+phone voice, authenticated always-on hosting, operational recovery and the final
+pilot. These future numbers are planning slots, not existing pull requests.
+
+Local draft deletion is already implemented. Native custom-food deletion and
+undo/deletion of logged diary entries remain separate future features. Neither
+may be implemented by deleting a whole diary day or silently replacing foods
+referenced by historical entries.
 
 ## Immediate next implementation task
 
