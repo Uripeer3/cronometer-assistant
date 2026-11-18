@@ -45,3 +45,21 @@ References checked 16 November 2026:
 ## Authentication is a separate milestone
 
 Do not paste a Cronometer password, session token, or two-factor secret into an assistant conversation. The upstream library currently relies on environment credentials and cached sessions; it is not an authentication UI. We must review and adapt that boundary before enabling the live catalog in the assistant.
+
+## Package photos and public review
+
+Retain product photos privately with their product/version even if the user does
+not want public submission. Current MCP tools do not ingest or archive images; a
+host must supply a durable retained-file reference or verified local archive.
+Never say a chat attachment was filed, attached to Cronometer, or submitted merely
+because it appeared in the conversation. These are three different outcomes.
+
+Once the label and saved private food are verified, offer public submission once
+unless the user already requested or declined it. Preserve that choice while
+collecting missing barcode/front/label evidence. Do not repeatedly request the
+same approval. The current public-submission tool only returns a checklist; use
+the authenticated Publish Food UI until actual upload/submission support exists.
+
+The implementation plan specifies durable evidence, attachment deduplication,
+choice persistence, upload receipts and interrupted-submission recovery. Test
+photos-retained-but-declined and already-requested-but-barcode-missing separately.

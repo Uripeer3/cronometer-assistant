@@ -69,3 +69,17 @@ If a key was not saved, its full secret cannot be retrieved again from the
 a replacement Restricted key with Tunnels Read + Use. To replace a locally saved
 key, stop the launcher, remove only `.runtime/tunnel-api-key`, and run again with
 `--save-key`. Deleting this local file does not revoke the key on OpenAI.
+
+## Evidence inbox and download reliability (feature stack)
+
+After the evidence PRs are merged, product mode can forward an explicit private
+inbox: `--mode products --evidence-inbox /absolute/private/inbox`. The host must
+place selected image attachments there first; this flag does not transfer chat
+attachments automatically. The server validates directory permissions and accepts
+filenames only. See [product evidence](product-evidence.md).
+
+Public GET downloads retry bounded transient failures. CI supplies its existing
+read-only GitHub token for the exact official release metadata request to avoid
+shared-runner anonymous rate limits. That authenticated request refuses redirects;
+asset downloads never receive the token. Runtime OpenAI keys are unrelated and
+are never used for GitHub downloads. Checksums and asset URL validation still apply.

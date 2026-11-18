@@ -16,6 +16,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.request
 import zipfile
@@ -78,13 +79,41 @@ def validate_tunnel_id(value: str) -> str:
     return value
 
 
+class NoCredentialRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.URLError("Refusing a redirect of the authenticated release lookup")
+
+
 def read_public_url(url: str, maximum: int) -> bytes:
-    request = urllib.request.Request(url, headers={"User-Agent": "cronometer-assistant-setup"})
-    with urllib.request.urlopen(request, timeout=60) as response:
-        payload = response.read(maximum + 1)
-    if len(payload) > maximum:
-        raise ValueError("Official download exceeds the setup size limit")
-    return payload
+    headers = {"User-Agent": "cronometer-assistant-setup"}
+    token = os.environ.get("TUNNEL_RELEASE_API_TOKEN") if url == RELEASE_API else None
+    if token:
+        if len(token) > 8192 or any(c.isspace() for c in token):
+            raise ValueError("Release lookup token has an invalid format")
+        headers["Authorization"] = "Bearer " + token
+    for attempt in range(3):
+        request = urllib.request.Request(url, headers=headers)
+        try:
+            # CI's read-only GitHub token is scoped to this exact metadata URL.
+            # Refuse redirects entirely on that request; asset downloads get no token.
+            opener = urllib.request.build_opener(NoCredentialRedirect()) if token else None
+            open_url = opener.open if opener else urllib.request.urlopen
+            with open_url(request, timeout=30) as response:
+                payload = response.read(maximum + 1)
+            if len(payload) > maximum:
+                raise ValueError("Official download exceeds the setup size limit")
+            return payload
+        except urllib.error.HTTPError as error:
+            retry = error.code in {429, 500, 502, 503, 504} or (
+                error.code == 403 and error.headers.get("X-RateLimit-Remaining") == "0"
+            )
+            if not retry or attempt == 2:
+                raise
+        except (TimeoutError, urllib.error.URLError):
+            if attempt == 2 or token:
+                raise
+        time.sleep(0.5 * (attempt + 1))
+    raise RuntimeError("Official download did not complete")
 
 
 def choose_asset(release: dict, system: str, machine: str) -> dict:
@@ -146,11 +175,17 @@ def acquire_client(folder: Path) -> Path:
 
 
 def launch_arguments(
-    client: Path, tunnel_id: str, python: Path, database: Path, *, mode: str = "demo"
+    client: Path,
+    tunnel_id: str,
+    python: Path,
+    database: Path,
+    *,
+    mode: str = "demo",
+    evidence_inbox: Path | None = None,
 ) -> list[str]:
     validate_tunnel_id(tunnel_id)
-    if mode not in {"demo", "read-only", "products"}:
-        raise ValueError("mode must be demo, read-only, or products")
+    if mode not in {"demo", "read-only", "products", "drafts"}:
+        raise ValueError("mode must be demo, read-only, products or drafts")
     server_args = (
         ["serve", "--db", str(database)]
         if mode == "demo"
@@ -160,14 +195,18 @@ def launch_arguments(
             str(database.parent / "cronometer-session/session.json"),
         ]
     )
-    if mode == "products":
+    if mode in {"products", "drafts"}:
         server_args = [
-            "serve-products",
+            "serve-products" if mode == "products" else "serve-drafts",
             "--db",
-            str(database.parent / "products.sqlite"),
+            str(database.parent / ("products.sqlite" if mode == "products" else "drafts.sqlite")),
             "--session",
             str(database.parent / "cronometer-session/session.json"),
         ]
+    if evidence_inbox is not None:
+        if mode != "products":
+            raise ValueError("Photo import requires products mode")
+        server_args += ["--evidence-inbox", str(evidence_inbox)]
     command = shlex.join(
         [
             str(python),
@@ -193,7 +232,12 @@ def launch_arguments(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tunnel-id", required=True, type=validate_tunnel_id)
-    parser.add_argument("--mode", choices=["demo", "read-only", "products"], default="demo")
+    parser.add_argument(
+        "--mode", choices=["demo", "read-only", "products", "drafts"], default="demo"
+    )
+    parser.add_argument(
+        "--evidence-inbox", type=Path, help="Private host-managed product image inbox"
+    )
     parser.add_argument(
         "--save-key",
         action="store_true",
@@ -240,7 +284,12 @@ def main() -> int:
         database = ROOT / "data" / "demo.sqlite"
         database.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         command = launch_arguments(
-            client, args.tunnel_id, ROOT / ".venv/bin/python", database, mode=args.mode
+            client,
+            args.tunnel_id,
+            ROOT / ".venv/bin/python",
+            database,
+            mode=args.mode,
+            evidence_inbox=args.evidence_inbox,
         )
         print(
             f"Starting {args.mode.upper()} tunnel. Keep this terminal open; Ctrl+C stops it.",

@@ -4,13 +4,19 @@ from .live import LiveError, ReadOnlyConnection
 from .models import ValidationError
 
 
-def create_read_only_server(connection: ReadOnlyConnection, *, product_service=None):
+def create_read_only_server(
+    connection: ReadOnlyConnection, *, product_service=None, draft_service=None
+):
     from mcp.server.fastmcp import FastMCP
 
     server = FastMCP(
         "Cronometer private products"
         if product_service
-        else "Cronometer food inspection — READ ONLY",
+        else (
+            "Cronometer local meal drafts"
+            if draft_service
+            else "Cronometer food inspection — READ ONLY"
+        ),
         instructions=(
             "Speak Hebrew or English according to the user. This connection only inspects "
             "real Cronometer food data. It cannot log/delete diary entries. "
@@ -28,8 +34,29 @@ def create_read_only_server(connection: ReadOnlyConnection, *, product_service=N
                 "the same proposal against its marked remote food. Barcode is local metadata only: "
                 "never claim app barcode scanning works. The public checklist does not submit or "
                 "publish anything; guide the documented manual flow when requested. "
+                "After reviewing package photos and verifying the private food, use the persisted choice and offer public "
+                "submission once if the user has not already requested or declined it. Retaining "
+                "photos privately and sharing them with Cronometer are separate actions. "
+                "Photo import requires the host to transfer files into the configured inbox first. "
+                "Host references alone do not verify local bytes; these tools never upload to Cronometer. "
+                "Only say photos were filed "
+                "when the host provides a durable file reference or verified archive result. "
                 if product_service
-                else "It cannot create drafts or save products. "
+                else (
+                    "It cannot save products. "
+                    if draft_service
+                    else "It cannot create drafts or save products. "
+                )
+            )
+            + (
+                " Local draft tools use real food data and account timezone, never write any diary. "
+                "Verify exact food identity, preparation and per-100-g basis before use. "
+                "Ask one or two useful questions, including dry/cooked weights and oils. "
+                "Preserve unresolved questions; estimates need user agreement and assumptions. "
+                "Cooking stays preparing; eaten requires actual consumption. Report saved as a "
+                "local draft, never logged. Remember aliases only when the user establishes a usual product. "
+                if draft_service
+                else ""
             )
             + "Never claim an unsupported action succeeded. Search and inspect returned "
             "food IDs. If Hebrew search fails, try an English translation. Source codes and "
@@ -45,11 +72,16 @@ def create_read_only_server(connection: ReadOnlyConnection, *, product_service=N
         try:
             return {"ok": True, **function(*args, **kwargs)}
         except (LiveError, ValidationError) as error:
-            return {"ok": False, **(product_service or connection).response(error=str(error))}
+            return {
+                "ok": False,
+                **(product_service or draft_service or connection).response(error=str(error)),
+            }
         except Exception:
             return {
                 "ok": False,
-                **(product_service or connection).response(error="Unexpected food-data response"),
+                **(product_service or draft_service or connection).response(
+                    error="Unexpected food-data response"
+                ),
             }
 
     @server.tool(annotations={"readOnlyHint": True})
@@ -125,5 +157,85 @@ def create_read_only_server(connection: ReadOnlyConnection, *, product_service=N
         def prepare_public_food_submission(proposal_id: str) -> dict:
             """Return the manual public-submission checklist; does NOT submit/publish."""
             return call(product_service.public_submission_checklist, proposal_id)
+
+        @server.tool(annotations={"readOnlyHint": False, "destructiveHint": False})
+        def attach_product_evidence_reference(
+            proposal_id: str, role: str, provider: str, reference: str
+        ) -> dict:
+            """Link an opaque durable host/Library file ID; does not transfer image bytes."""
+            return call(
+                product_service.attach_evidence_reference, proposal_id, role, provider, reference
+            )
+
+        @server.tool(annotations={"readOnlyHint": False, "destructiveHint": False})
+        def import_product_photo(proposal_id: str, role: str, inbox_name: str) -> dict:
+            """Archive an image already transferred into the configured private inbox.
+
+            Accepts a filename only, never arbitrary paths/URLs. No Cronometer upload.
+            Roles: package_front, nutrition_label, barcode, ingredients.
+            """
+            return call(product_service.import_evidence, proposal_id, role, inbox_name)
+
+        @server.tool(annotations={"readOnlyHint": True})
+        def get_product_evidence(proposal_id: str) -> dict:
+            """Review retained references and recheck archived bytes without uploading."""
+            return call(product_service.review_evidence, proposal_id)
+
+        @server.tool(annotations={"readOnlyHint": False, "destructiveHint": False})
+        def set_product_submission_choice(
+            proposal_id: str, expected_revision: int, choice: str
+        ) -> dict:
+            """Remember the user's requested/declined/deferred choice; never uploads/submits."""
+            return call(
+                product_service.set_submission_choice, proposal_id, expected_revision, choice
+            )
+
+        @server.tool(annotations={"readOnlyHint": False, "destructiveHint": False})
+        def set_product_barcode(proposal_id: str, barcode: str) -> dict:
+            """Validate and retain a barcode locally; does not link it in Cronometer."""
+            return call(product_service.set_submission_barcode, proposal_id, barcode)
+
+        @server.tool(annotations={"readOnlyHint": False, "destructiveHint": False})
+        def record_manual_submission_outcome(
+            proposal_id: str, expected_revision: int, status: str, receipt: str
+        ) -> dict:
+            """Record an operator-observed outcome, never claim API verification.
+
+            Use only after the operator observed Cronometer's receipt/status.
+            Status: submitted_pending, accepted, rejected or unknown. A timeout is
+            unknown; inspect before resubmitting. No network submission occurs here.
+            """
+            return call(
+                product_service.record_submission_outcome,
+                proposal_id,
+                expected_revision,
+                status,
+                receipt,
+            )
+
+        from .repairs import ProductRepairs
+
+        repairs = ProductRepairs(product_service)
+
+        @server.tool(annotations={"readOnlyHint": False, "destructiveHint": False})
+        def prepare_product_repair(
+            proposal_id: str, category_id: int, serving_grams: float
+        ) -> dict:
+            """Snapshot the same private food for a manual usability repair; no remote edit.
+
+            Correct it in the app if needed, then prepare a fresh matching snapshot.
+            Nutrients must still match the reviewed label.
+            """
+            return call(repairs.prepare, proposal_id, category_id, serving_grams)
+
+        @server.tool(annotations={"readOnlyHint": False, "destructiveHint": False})
+        def adopt_manual_product_repair(repair_id: str, reviewed: bool) -> dict:
+            """Re-read and adopt a matching reviewed repair locally; no remote writes."""
+            return call(repairs.adopt, repair_id, reviewed)
+
+    if draft_service is not None:
+        from .draft_tools import register_draft_tools
+
+        register_draft_tools(server, draft_service, call)
 
     return server

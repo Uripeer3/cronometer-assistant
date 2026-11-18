@@ -2,7 +2,7 @@
 
 A private prototype for logging meals through an existing AI assistant. The assistant handles Hebrew/English conversation and attached photos; this Python service owns persistent meal drafts, food-source policy, product memory, nutrient validation, and write reconciliation.
 
-**Current milestone: tested conversational demo and real-food inspection, plus opt-in private custom-food creation awaiting a controlled live write test. No real Cronometer diary writes are implemented.** Demo food profiles are invented fixtures; their NCCDB/USDA source labels exercise ranking policy and are not authentic database extracts.
+**Current milestone: tested conversational demo, real-food inspection and a controlled private custom-food creation. Serving, category and label-display fixes are merged. Automatic photo intake, public submission and real Cronometer diary writes are not implemented on main.** Demo food profiles are invented fixtures; their NCCDB/USDA source labels exercise ranking policy and are not authentic database extracts.
 
 ## Try the working demo
 
@@ -81,5 +81,20 @@ are preserved. The current read-only connection stays read-only.
 After updating, an explicit `--mode products` launch adds reviewed private-food
 creation with an account-bound journal and read-back checks. It cannot edit
 existing foods, write a diary, link barcodes, or publish to CRDB. The public
-submission tool is a checklist, not a submission API. Live creation still needs
-a user-reviewed test; no food has been created by the automated test suite.
+submission tool is a checklist, not a submission API. A controlled private-food creation and UI correction have been exercised; automated
+tests use synthetic data and do not create real foods.
+
+See the [development PR map](docs/pr-map.md) for the next review and test sequence.
+
+
+## Open development batch
+
+The [PR map](docs/pr-map.md) links the unmerged implementation stack and morning
+checks. New feature branches add private photo evidence, submission choices,
+manual-repair reconciliation, real-food local drafts and backup/restore. These
+are not deployed capabilities until reviewed, tested and merged.
+
+After merging the stack, use [product evidence](docs/product-evidence.md),
+[manual repairs](docs/product-repairs.md), [real-food drafts](docs/live-drafts.md)
+and [backup/restore](docs/backups.md). Real diary writes and automatic public
+submission remain subsequent milestones.

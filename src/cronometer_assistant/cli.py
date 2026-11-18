@@ -54,7 +54,18 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "command",
-        choices=["demo", "serve", "login", "check-cronometer", "serve-read-only", "serve-products"],
+        choices=[
+            "demo",
+            "serve",
+            "login",
+            "check-cronometer",
+            "serve-read-only",
+            "serve-products",
+            "serve-drafts",
+            "backup-runtime",
+            "verify-backup",
+            "restore-runtime",
+        ],
     )
     parser.add_argument("--db", type=Path, help="Persistent SQLite path (private runtime data)")
     parser.add_argument(
@@ -63,8 +74,45 @@ def main():
         default=Path("data/cronometer-session/session.json"),
         help="Private local Cronometer session; never a password file",
     )
+    parser.add_argument("--evidence-inbox", type=Path, help="Private host-managed image inbox")
+    parser.add_argument(
+        "--backup-dir", type=Path, help="New private backup or existing verified backup"
+    )
+    parser.add_argument("--restore-dir", type=Path, help="New isolated restore directory")
     args = parser.parse_args()
-    if args.command in {"login", "check-cronometer", "serve-read-only", "serve-products"}:
+    if args.command in {"backup-runtime", "verify-backup", "restore-runtime"}:
+        from .backups import create_backup, restore_backup, verify_backup
+
+        try:
+            if args.backup_dir is None:
+                raise ValidationError("Provide --backup-dir")
+            if args.command == "backup-runtime":
+                if args.db is None or args.db.is_symlink() or not args.db.is_file():
+                    raise ValidationError(
+                        "Provide --db pointing to an existing application database"
+                    )
+                result = create_backup(Store(args.db), args.backup_dir)
+            elif args.command == "verify-backup":
+                result = verify_backup(args.backup_dir)
+            else:
+                if args.restore_dir is None:
+                    raise ValidationError("Provide a new --restore-dir")
+                result = restore_backup(args.backup_dir, args.restore_dir)
+            print(json.dumps(result, indent=2))
+        except (OSError, ValueError, RuntimeError):
+            print(
+                "Backup operation failed; check private paths, integrity and destination availability.",
+                file=sys.stderr,
+            )
+            raise SystemExit(1) from None
+        return
+    if args.command in {
+        "login",
+        "check-cronometer",
+        "serve-read-only",
+        "serve-products",
+        "serve-drafts",
+    }:
         from .live import LiveError, ReadOnlyConnection, create_client
 
         connection = None
@@ -89,9 +137,24 @@ def main():
                     from .products import ProductService
 
                     products = ProductService(
-                        Store(args.db or Path("data/products.sqlite")), connection.client
+                        Store(args.db or Path("data/products.sqlite")),
+                        connection.client,
+                        evidence_inbox=args.evidence_inbox,
                     )
-                create_read_only_server(connection, product_service=products).run(transport="stdio")
+                drafts = None
+                if args.command in {"serve-drafts", "serve-products"}:
+                    from .live_drafts import LiveDraftService
+
+                    drafts = LiveDraftService(
+                        Store(
+                            args.db
+                            or Path("data/products.sqlite" if products else "data/drafts.sqlite")
+                        ),
+                        connection.client,
+                    )
+                create_read_only_server(
+                    connection, product_service=products, draft_service=drafts
+                ).run(transport="stdio")
         except (LiveError, ValidationError) as error:
             print(str(error), file=sys.stderr)  # Only our scrubbed diagnostics.
             raise SystemExit(1) from None
