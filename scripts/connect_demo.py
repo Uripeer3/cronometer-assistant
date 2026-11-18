@@ -184,8 +184,8 @@ def launch_arguments(
     evidence_inbox: Path | None = None,
 ) -> list[str]:
     validate_tunnel_id(tunnel_id)
-    if mode not in {"demo", "read-only", "products", "drafts"}:
-        raise ValueError("mode must be demo, read-only, products or drafts")
+    if mode not in {"demo", "read-only", "products", "drafts", "meals"}:
+        raise ValueError("mode must be demo, read-only, products, drafts or meals")
     server_args = (
         ["serve", "--db", str(database)]
         if mode == "demo"
@@ -195,9 +195,9 @@ def launch_arguments(
             str(database.parent / "cronometer-session/session.json"),
         ]
     )
-    if mode in {"products", "drafts"}:
+    if mode in {"products", "drafts", "meals"}:
         server_args = [
-            "serve-products" if mode == "products" else "serve-drafts",
+            f"serve-{mode}",
             "--db",
             str(database.parent / ("products.sqlite" if mode == "products" else "drafts.sqlite")),
             "--session",
@@ -233,7 +233,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tunnel-id", required=True, type=validate_tunnel_id)
     parser.add_argument(
-        "--mode", choices=["demo", "read-only", "products", "drafts"], default="demo"
+        "--mode", choices=["demo", "read-only", "products", "drafts", "meals"], default="demo"
     )
     parser.add_argument(
         "--evidence-inbox", type=Path, help="Private host-managed product image inbox"

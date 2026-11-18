@@ -73,6 +73,7 @@ class Food:
     brand: str | None = None
     aliases: tuple[str, ...] = ()
     synthetic: bool = False
+    translation_id: int = 0
 
     def __post_init__(self):
         text(self.food_id, "food_id", 200)
@@ -132,6 +133,9 @@ class DiaryEntry:
     grams: float
     day: str
     meal_group: str
+    local_time: str | None = None
+    measure_id: int | None = None
+    translation_id: int | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)

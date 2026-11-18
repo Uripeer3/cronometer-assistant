@@ -2,7 +2,28 @@
 
 A private prototype for logging meals through an existing AI assistant. The assistant handles Hebrew/English conversation and attached photos; this Python service owns persistent meal drafts, food-source policy, product memory, nutrient validation, and write reconciliation.
 
-**Current milestone: tested conversational demo, real-food inspection and a controlled private custom-food creation. Serving, category and label-display fixes are merged. Automatic photo intake, public submission and real Cronometer diary writes are not implemented on main.** Demo food profiles are invented fixtures; their NCCDB/USDA source labels exercise ranking policy and are not authentic database extracts.
+## Log meals in ChatGPT
+
+Use the **meals** server mode for a personal Cronometer diary. The server runs on your computer and ChatGPT reaches it through the existing private MCP tunnel. On a new installation, install the locked dependencies and sign in to Cronometer once from a terminal in the repository.
+
+```bash
+uv sync --locked --extra mcp --extra live --no-dev
+.venv/bin/python -m cronometer_assistant login
+```
+
+Start the server from the checkout that holds your private session and SQLite data. Stop any previous launcher using this tunnel first.
+
+```bash
+python3 scripts/connect_demo.py --mode meals --tunnel-id YOUR_TUNNEL_ID
+```
+
+Keep the launcher running. Once the tunnel is ready, refresh the connection in ChatGPT and select the Cronometer assistant. For a first read, ask **“How many calories and how much protein have I logged today?”** The `get_daily_nutrition` tool reads Cronometer's tracked totals for the chosen account day, including foods entered through the app. It returns amounts with units and leaves missing values unknown.
+
+To log a meal, describe what you ate in Hebrew or English. For example, **“For lunch at 13:00 I ate 150 g of cooked white rice.”** The assistant finds the food, verifies its preparation and nutrient basis, and shows the selected food, grams, date, account-local time and meal group. Once you confirm that review, `log_meal` sends each weighed serving and verifies the returned entry in the diary. The journal prevents a repeated request from adding a second serving. An uncertain response can be checked with `get_logging_status`.
+
+To change an assistant-logged serving, say **“Change that rice from 150 g to 120 g”** or **“Undo the rice.”** The assistant identifies the particular serving, asks for confirmation, then verifies the result. The tools are `correct_logged_amount` and `undo_logged_item`. A meal can contain several servings.
+
+The installed ChatGPT connection has been tested with live food reads and daily totals. Automated tests exercise add, correct, undo and uncertain responses using the pinned Cronometer client and simulated HTTP. The final live write check is a real meal you choose to log, followed by a check of its date, amount and meal group in Cronometer.
 
 ## Try the working demo
 
@@ -42,7 +63,7 @@ To test it in ChatGPT through an OpenAI private tunnel, use the [tunnel setup gu
 - Separate real-food inspection tools with hidden local login, one-time 2FA, private session storage and blocked diary writes. See the [read-only guide](docs/cronometer-read-only.md).
 - A pure recipe-portion calculation using finished batch weight. Saved recipe versions and native recipe writes are future work.
 
-## Tool workflow
+## Demo tool workflow
 
 1. `begin_meal` creates a draft; preparing a dish does not log consumption.
 2. `resolve_food` returns candidates with food IDs, sources, and nutrient profiles.
@@ -53,21 +74,13 @@ To test it in ChatGPT through an OpenAI private tunnel, use the [tunnel setup gu
 7. `get_logging_status` lets a later session resume the same draft or inspect an unfinished operation.
 8. `delete_meal_draft` discards an unlogged draft when the user asks. It cannot undo diary entries.
 
-Photo-based product entry uses `propose_product_from_label` followed by `save_verified_product`. Product saving is currently local to the demo catalog. `remember_product` records an alias only after the user establishes the preference.
+Photo-based product entry uses `propose_product_from_label` followed by `save_verified_product`. In demo mode the product is saved in the local demo catalog. `remember_product` records an alias only after the user establishes the preference.
 
 ## Development and ownership
 
-Our application is independent of the upstream connector. Only the optional `live` extra depends on [rollecode/cronometer-mcp](https://github.com/rollecode/cronometer-mcp), pinned to commit `e123a4721093efa55adac665e10a546c105eb117`. Nothing from that project has been copied into this source tree. Live login uses hidden local terminal prompts; credentials and real writes are never exposed through MCP.
+Our application is independent of the upstream connector. Only the optional `live` extra depends on [rollecode/cronometer-mcp](https://github.com/rollecode/cronometer-mcp), pinned to commit `e123a4721093efa55adac665e10a546c105eb117`. Nothing from that project has been copied into this source tree. Live login uses hidden local terminal prompts. The meals MCP mode exposes reviewed serving writes through the account-bound diary workflow.
 
 Use short branches and pull requests. CI checks formatting/lint, domain tests, package installation, and a real SDK/stdio round trip. Test fixtures need no food/health data, credentials, or repository secrets. Read [development notes](docs/development.md) and the [implementation plan](docs/implementation-plan.md).
-
-## Next milestones
-
-1. The initial Hebrew/English conversational draft test passed; continue measuring voice friction.
-2. Run the [real-account read-only check](docs/cronometer-read-only.md), including interactive login.
-3. Establish source-code mappings and nutrient/serving fidelity against the app.
-4. Implement controlled live writes and corrections with explicit integration tests.
-5. Add saved/versioned recipes, deployment authentication, backups, and the real-meal voice pilot.
 
 GitHub stores source and synthetic fixtures. Runtime SQLite files, credentials, session tokens, and package-label photographs remain outside the repository.
 
@@ -87,14 +100,6 @@ tests use synthetic data and do not create real foods.
 See the [development PR map](docs/pr-map.md) for the next review and test sequence.
 
 
-## Open development batch
+## Pilot guides
 
-The [PR map](docs/pr-map.md) links the unmerged implementation stack and morning
-checks. New feature branches add private photo evidence, submission choices,
-manual-repair reconciliation, real-food local drafts and backup/restore. These
-are not deployed capabilities until reviewed, tested and merged.
-
-After merging the stack, use [product evidence](docs/product-evidence.md),
-[manual repairs](docs/product-repairs.md), [real-food drafts](docs/live-drafts.md)
-and [backup/restore](docs/backups.md). Real diary writes and automatic public
-submission remain subsequent milestones.
+The merged pilot includes [private product evidence](docs/product-evidence.md), [manual food repair reconciliation](docs/product-repairs.md), [local drafts using real foods](docs/live-drafts.md) and [backup/restore](docs/backups.md). The [PR map](docs/pr-map.md) records the wider backlog.

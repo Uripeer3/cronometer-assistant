@@ -1,5 +1,6 @@
 """Catalog policy and a read-only adapter around the pinned upstream client."""
 
+from dataclasses import replace
 from typing import Protocol
 
 from .models import UNITS, Food, Nutrient, ValidationError, normalized
@@ -150,7 +151,15 @@ def rank_foods(
             continue
         identity = 1 if normalized(query) in names else overlap
         remembered = int(food.food_id == remembered_id)
-        brand_match = int(bool(brand) and normalized(food.brand or "") == normalized(brand))
+        brand_key = normalized(brand or "")
+        brand_match = int(
+            bool(brand_key)
+            and (
+                normalized(food.brand) == brand_key
+                if food.brand
+                else f" {brand_key} " in f" {normalized(food.name)} "
+            )
+        )
         if brand and not brand_match:
             continue
         preferred_source = int(
@@ -231,10 +240,17 @@ class CronometerReadOnlyCatalog:
 
     def search(self, query: str) -> list[Food]:
         # Limit detail calls. The caller can refine its search rather than retrieving the catalog.
-        return [
-            self._food(self.client.get_food(row["id"]), row.get("source"))
-            for row in self.client.search_food(query)[:10]
-        ]
+        foods = []
+        for row in self.client.search_food(query)[:6]:
+            food = self._food(self.client.get_food(row["id"]), row.get("source"))
+            foods.append(
+                replace(
+                    food,
+                    name=row.get("name") or food.name,
+                    translation_id=row.get("translationId") or 0,
+                )
+            )
+        return foods
 
     def get(self, food_id: str) -> Food:
         if not food_id.startswith("crono:"):

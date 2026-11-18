@@ -15,6 +15,15 @@ from .store import Store
 GROUPS = {"breakfast", "lunch", "dinner", "snack"}
 
 
+def calendar_day(day):
+    try:
+        if date.fromisoformat(day).isoformat() == day:
+            return day
+    except (ValueError, TypeError):
+        pass
+    raise ValidationError("day must use YYYY-MM-DD")
+
+
 class MealService:
     def __init__(
         self,
@@ -30,9 +39,9 @@ class MealService:
         self.draft_only = draft_only
         self.diary = diary or (NoDiary() if draft_only else DemoDiary(store))
         self.timezone = ZoneInfo(timezone)
-        # The write path deliberately cannot be enabled against a real diary in this milestone.
-        if self.diary.mode != ("unavailable" if draft_only else "demo"):
-            raise ValidationError("Real diary writes are not implemented in this milestone")
+        modes = {"unavailable"} if draft_only else {"demo", "cronometer_live"}
+        if self.diary.mode not in modes:
+            raise ValidationError("Invalid diary backend for this service")
 
     def response(self, **data) -> dict:
         return {
@@ -55,14 +64,11 @@ class MealService:
         day: str | None = None,
         meal_group: str = "lunch",
         intent: str = "preparing",
+        local_time: str | None = None,
     ) -> dict:
         title = text(title, "meal title")
         day = day or datetime.now(self.timezone).date().isoformat()
-        try:
-            if date.fromisoformat(day).isoformat() != day:
-                raise ValueError
-        except (ValueError, TypeError) as error:
-            raise ValidationError("day must use YYYY-MM-DD") from error
+        day = calendar_day(day)
         if meal_group not in GROUPS:
             raise ValidationError("Choose breakfast, lunch, dinner, or snack")
         if intent not in {"preparing", "eaten"}:
@@ -79,6 +85,8 @@ class MealService:
             "items": [],
             "pending_questions": [],
         }
+        if local_time is not None:
+            meal["local_time"] = local_time
         with self.store.locked():
             self.store.put("meals", meal["meal_id"], meal)
         return self.response(meal=meal)
@@ -126,6 +134,9 @@ class MealService:
         items: list[dict],
         pending_questions: list[str] | None = None,
         intent: str | None = None,
+        day: str | None = None,
+        meal_group: str | None = None,
+        local_time: str | None = None,
     ) -> dict:
         if not isinstance(items, list) or len(items) > 100:
             raise ValidationError("items must be a complete list of at most 100 foods")
@@ -159,6 +170,14 @@ class MealService:
             if questions is not None:
                 meal["pending_questions"] = questions
             meal["intent"] = intent or meal["intent"]
+            if day is not None:
+                meal["day"] = calendar_day(day)
+            if meal_group is not None:
+                if meal_group not in GROUPS:
+                    raise ValidationError("Choose breakfast, lunch, dinner, or snack")
+                meal["meal_group"] = meal_group
+            if local_time is not None:
+                meal["local_time"] = local_time
             meal["revision"] += 1
             review = self._review(meal)
             meal["state"] = "needs_clarification" if review["questions"] else "ready"
@@ -324,7 +343,13 @@ class MealService:
             ]
         )
 
-    def commit_meal(self, meal_id: str, expected_revision: int) -> dict:
+    def _planned_steps(self, meal, review_token):
+        return [{"item": row, "state": "pending"} for row in meal["items"]]
+
+    def _matches_step(self, entry, step, meal):
+        return self._matches(entry, step["item"], meal)
+
+    def commit_meal(self, meal_id: str, expected_revision: int, *, review_token=None) -> dict:
         if self.draft_only:
             raise ValidationError("This mode saves local drafts only; diary writes are unavailable")
         with self.store.locked():
@@ -332,6 +357,8 @@ class MealService:
             if expected_revision != meal["revision"]:
                 raise ValidationError("Review the current draft revision before logging")
             operation = self.store.get("operations", meal_id)
+            if operation and operation.get("review_token") != review_token:
+                raise ValidationError("Use the review token from this logging operation")
             if operation and operation["state"] == "committed":
                 return self.response(operation=operation, already_logged=True)
             if operation is None:
@@ -342,8 +369,10 @@ class MealService:
                     "meal_id": meal_id,
                     "revision": meal["revision"],
                     "state": "writing",
-                    "steps": [{"item": row, "state": "pending"} for row in meal["items"]],
+                    "steps": self._planned_steps(meal, review_token),
                 }
+                if review_token is not None:
+                    operation["review_token"] = review_token
                 self._persist_operation(meal, operation, "writing")
             for step in operation["steps"]:
                 if step["state"] == "verified":
@@ -363,12 +392,13 @@ class MealService:
                     # Durable before the remote side effect; a crash now requires reconciliation.
                     self._persist_operation(meal, operation, "writing")
                     try:
-                        entry = self.diary.add(
-                            food_id=step["item"]["food_id"],
-                            grams=step["item"]["grams"],
-                            day=meal["day"],
-                            meal_group=meal["meal_group"],
-                        )
+                        params = step.get("add_parameters") or {
+                            "food_id": step["item"]["food_id"],
+                            "grams": step["item"]["grams"],
+                            "day": meal["day"],
+                            "meal_group": meal["meal_group"],
+                        }
+                        entry = self.diary.add(**params)
                     except Exception:
                         # Persist no exception text: it might include credentials or request data.
                         step["state"] = "uncertain"
@@ -383,7 +413,7 @@ class MealService:
                     self._persist_operation(meal, operation, "needs_verification")
                     return self.response(operation=operation, retry_safe=True)
                 found = next((e for e in after if e.entry_id == step["entry_id"]), None)
-                if found is None or not self._matches(found, step["item"], meal):
+                if found is None or not self._matches_step(found, step, meal):
                     self._persist_operation(meal, operation, "needs_reconciliation")
                     return self.response(operation=operation, retry_blocked=True)
                 if found.entry_id in step["baseline_ids"]:
@@ -417,7 +447,7 @@ class MealService:
             entry = next(
                 (e for e in self.diary.entries(meal["day"]) if e.entry_id == entry_id), None
             )
-            if entry is None or not self._matches(entry, step["item"], meal):
+            if entry is None or not self._matches_step(entry, step, meal):
                 raise ValidationError("Entry does not match this item, amount, date, and group")
             step["entry_id"], step["state"] = entry_id, "verified"
             state = (

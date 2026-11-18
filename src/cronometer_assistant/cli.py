@@ -62,6 +62,7 @@ def main():
             "serve-read-only",
             "serve-products",
             "serve-drafts",
+            "serve-meals",
             "backup-runtime",
             "verify-backup",
             "restore-runtime",
@@ -112,6 +113,7 @@ def main():
         "serve-read-only",
         "serve-products",
         "serve-drafts",
+        "serve-meals",
     }:
         from .live import LiveError, ReadOnlyConnection, create_client
 
@@ -122,6 +124,7 @@ def main():
                     args.session,
                     interactive=args.command == "login",
                     allow_product_creation=args.command == "serve-products",
+                    allow_diary=args.command == "serve-meals",
                 )
             )
             if args.command == "login":
@@ -142,10 +145,11 @@ def main():
                         evidence_inbox=args.evidence_inbox,
                     )
                 drafts = None
-                if args.command in {"serve-drafts", "serve-products"}:
-                    from .live_drafts import LiveDraftService
+                if args.command in {"serve-drafts", "serve-products", "serve-meals"}:
+                    from .live_drafts import LiveDraftService, LiveMealService
 
-                    drafts = LiveDraftService(
+                    service = LiveMealService if args.command == "serve-meals" else LiveDraftService
+                    drafts = service(
                         Store(
                             args.db
                             or Path("data/products.sqlite" if products else "data/drafts.sqlite")
@@ -153,7 +157,10 @@ def main():
                         connection.client,
                     )
                 create_read_only_server(
-                    connection, product_service=products, draft_service=drafts
+                    connection,
+                    product_service=products,
+                    draft_service=drafts,
+                    live_meals=args.command == "serve-meals",
                 ).run(transport="stdio")
         except (LiveError, ValidationError) as error:
             print(str(error), file=sys.stderr)  # Only our scrubbed diagnostics.

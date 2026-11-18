@@ -5,21 +5,33 @@ from .models import ValidationError
 
 
 def create_read_only_server(
-    connection: ReadOnlyConnection, *, product_service=None, draft_service=None
+    connection: ReadOnlyConnection, *, product_service=None, draft_service=None, live_meals=False
 ):
     from mcp.server.fastmcp import FastMCP
 
     server = FastMCP(
-        "Cronometer private products"
-        if product_service
+        "Cronometer meal logging"
+        if live_meals
         else (
-            "Cronometer local meal drafts"
-            if draft_service
-            else "Cronometer food inspection — READ ONLY"
+            "Cronometer private products"
+            if product_service
+            else ("Cronometer local meal drafts" if draft_service else "Cronometer food inspection")
         ),
         instructions=(
-            "Speak Hebrew or English according to the user. This connection only inspects "
-            "real Cronometer food data. It cannot log/delete diary entries. "
+            "Speak Hebrew or English according to the user. "
+            + (
+                "You can read daily totals and log approved meals in the real Cronometer diary. "
+                "Pass the reported date and wall time as given. Pass each selected search "
+                "result's translation ID and original search query when verifying a food. "
+                "Present the exact foods, grams, date, time, and group to the user before a "
+                "live write. Use the review token for that revision, and set confirmed only "
+                "after the user explicitly approves that review. Report logged only if the "
+                "operation is committed. If a write is uncertain, check its status before "
+                "doing anything else. Corrections and undo require explicit user confirmation "
+                "of the identified serving. "
+                if live_meals
+                else "This connection cannot log or delete diary entries. "
+            )
             + (
                 "Product mode can prepare labels and create NEW private foods only after the user "
                 "asks to save one and reviews the proposal. Include brand and exact variant in its "
@@ -43,18 +55,18 @@ def create_read_only_server(
                 "when the host provides a durable file reference or verified archive result. "
                 if product_service
                 else (
-                    "It cannot save products. "
+                    "For a new private custom food, use Cronometer's custom-food form. "
                     if draft_service
                     else "It cannot create drafts or save products. "
                 )
             )
             + (
-                " Local draft tools use real food data and account timezone, never write any diary. "
+                " Draft tools use real food data and the account timezone. "
                 "Verify exact food identity, preparation and per-100-g basis before use. "
                 "Ask one or two useful questions, including dry/cooked weights and oils. "
                 "Preserve unresolved questions; estimates need user agreement and assumptions. "
-                "Cooking stays preparing; eaten requires actual consumption. Report saved as a "
-                "local draft, never logged. Remember aliases only when the user establishes a usual product. "
+                "Cooking stays preparing; eaten requires actual consumption. Report a local draft "
+                "as a draft. Remember aliases only when the user establishes a usual product. "
                 if draft_service
                 else ""
             )
@@ -80,7 +92,7 @@ def create_read_only_server(
             return {
                 "ok": False,
                 **(product_service or draft_service or connection).response(
-                    error="Unexpected food-data response"
+                    error="Unexpected Cronometer response"
                 ),
             }
 
@@ -237,5 +249,9 @@ def create_read_only_server(
         from .draft_tools import register_draft_tools
 
         register_draft_tools(server, draft_service, call)
+        if live_meals:
+            from .meal_tools import register_meal_tools
+
+            register_meal_tools(server, draft_service, call)
 
     return server
