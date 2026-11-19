@@ -4,6 +4,8 @@ A private prototype for logging meals through an existing AI assistant. The assi
 
 ## Log meals in ChatGPT
 
+**Start here:** [End-to-end setup, automatic startup, updates and recovery](docs/setup-and-operations.md). It covers the local service, private key, tunnel, ChatGPT connection and everyday restart commands. Already set up? Jump to its everyday commands or update procedure.
+
 Use the **meals** server mode for a personal Cronometer diary. The server runs on your computer and ChatGPT reaches it through the existing private MCP tunnel. On a new installation, install the locked dependencies and sign in to Cronometer once from a terminal in the repository.
 
 ```bash
