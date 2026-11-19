@@ -1,12 +1,12 @@
 # Personal-use scope and simple hosting
 
-Reviewed 17 November 2026. This is one person's home utility: easy meal logging,
+Scope reviewed 17 November; implementation status updated 19 November 2026. This is one person's home utility: easy meal logging,
 short follow-up questions and straightforward fixes. It is not a commercial app.
 The complete PR list is a feature checklist, not 21 more prerequisites to daily use.
 
 ## Review of the actual code
 
-The feature stack contains about 3,200 lines of application Python, a pinned client
+The feature stack contains about 4,100 lines of application Python, a pinned client
 adapter, SQLite and ordinary files. The service does not invoke an LLM API itself;
 the existing assistant does the conversation and image interpretation. There are
 no separate database servers, queues, business accounts or distributed services.
@@ -36,24 +36,27 @@ meals and damaged history would defeat the purpose. Those are small useful safeg
 
 ## Smaller delivery order
 
-1. **Run the current tool away from the laptop.** Test one phone tool call, then
-   install on an existing always-on home device or one small Linux VM. Keep the
-   current tunnel, SQLite and file layout. One service starts it after reboot.
-2. **Make ordinary logging useful.** Verify representative source/serving data,
-   then implement diary read, add, uncertainty recovery, amount correction and
-   exact-entry undo together as a coherent milestone. Use the journal already built.
-3. **Make repeated products easy.** Usual-product aliases, label photos delivered
-   automatically into the archive, serving grams and barcode reuse. Keep evidence
-   even if publication is declined; use the app for submission until automation pays off.
-4. **Add batch meals.** Save ingredients and yield; use weighed portions or accepted
-   fractions. Preserve older versions when a recipe changes.
-5. **Only then fill real friction gaps.** Native photo/submission automation, more
-   custom-food administration or extra diagnostics are driven by actual use.
+1. **Resolve review findings and finish ordinary logging.** The diary add/read,
+   amount-correction and item-undo implementation is on main. Fix the concrete
+   issues in the [audit](code-review-2026-11-19.md), then verify a scoped real meal
+   and positive daily totals in Cronometer. Do not treat green fixtures as a live test.
+2. **Make one everyday connection.** Product and meal tools currently require
+   separate modes and default databases. Combine them with a small deliberate
+   state migration, a reliable local start command and a tested update/restore path.
+3. **Make repeated foods easy.** Retain exact selection identity, use verified
+   household measures, reuse aliases and deliver chat photos into the existing
+   archive. Keep originals even if publication is declined.
+4. **Add batch meals.** Save ingredient versions and yield/fractions; reuse the
+   existing diary journal rather than inventing a separate recipe-writing service.
+5. **Test mobile use and choose hosting when useful.** A phone smoke test can run
+   early; a host move is not required to finish laptop logging. Keep the tunnel,
+   SQLite and files. Android work is deferred. Native submission and rare food
+   administration can use the app until automation saves effort.
 
-The numbered PRs 15–35 remain available for tracing requirements. Combine/split or
-skip optional items rather than treating every number as a promised separate PR.
-Move basic hosting (previous slot 33) early. Slot 34 means basic maintainability,
-not a production operations project; slot 35 becomes a short personal-use trial.
+The [current map](pr-map.md) uses R15–R35 as requirement IDs, not future GitHub
+PR numbers, and A1–A11 for new review work. It distinguishes implemented code from
+live acceptance. The hosting comparison below retains its 17 November research
+date; prices and availability were not rechecked in this code review.
 
 ## What hosting actually needs
 
@@ -150,11 +153,12 @@ password does not bypass it. Do not introduce a secret-manager service just for 
 
 ## Recommendation
 
-Keep the current small architecture and bring deployment forward. First check for
-an existing suitable home device. If none exists, an Oracle Always Free VM is a
-reasonable $0 experiment when accepting its capacity/reclaim caveats; use a small
-paid VM if recovering a free instance becomes more trouble than the saving. Do not
-open accounts, commit to charges or deploy before choosing the actual target.
+Keep the current small architecture. Finish correctness/recovery and a usable
+laptop meal pilot first; add reliable local supervision. When laptop-off use is
+wanted, choose one suitable existing home device or small persistent Linux VM.
+The earlier hosting comparison suggests a free VM experiment or a small paid VM,
+but requires fresh price/availability checks before choosing a provider. No account
+purchase or deployment is part of the audit, and Android work remains deferred.
 
 ### Sources
 

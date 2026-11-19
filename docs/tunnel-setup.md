@@ -72,7 +72,7 @@ key, stop the launcher, remove only `.runtime/tunnel-api-key`, and run again wit
 
 ## Evidence inbox and download reliability (feature stack)
 
-After the evidence PRs are merged, product mode can forward an explicit private
+Product mode can forward an explicit private
 inbox: `--mode products --evidence-inbox /absolute/private/inbox`. The host must
 place selected image attachments there first; this flag does not transfer chat
 attachments automatically. The server validates directory permissions and accepts

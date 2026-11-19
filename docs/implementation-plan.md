@@ -1,14 +1,25 @@
 # Conversational Cronometer logger — implementation plan
 
-Prepared 16 November 2026. Status: conversational prototype, real-account food lookup, and a controlled private-food creation have been exercised. Live UI review exposed serving-type, category and label-display gaps; creation fixes are merged. Automatic photo intake/archive and public-upload integration remain pending. Live diary writes, automated existing-food corrections and public-food submission are not yet implemented.
+Prepared 16 November 2026; status reconciled 19 November 2026 against main
+`e57a534b` (PR #16). This document describes design requirements, including future
+features. Use the [current roadmap](pr-map.md) for implementation/acceptance status
+and the [independent review](code-review-2026-11-19.md) for unresolved defects.
 
+Real-account lookup, local drafts, private custom-food creation, private inbox
+photo archiving, manual repair/submission journals and backup/restore are on main.
+Live diary add, amount correction, per-item undo and daily totals are implemented;
+live reads have been exercised, but actual diary writes still need acceptance.
+The audit identifies correctness/recovery work before treating that pilot as ready.
+Automatic chat-photo transfer, native barcode/photos/public submission, remote
+custom-food editing/deletion and saved recipes remain pending.
 ## Scope correction: personal utility
 
 The user wants a small home/personal tool: simple flow, easy fixes and minimal
 maintenance. The complete PR table is a backlog, not a commercial-product plan.
 Use the [personal scope review](personal-scope.md) and the new priority section in
-[the PR map](pr-map.md) to order delivery: early basic deployment; ordinary meal
-logging/correction/undo; useful product/label support; then batch recipes.
+[the PR map](pr-map.md) to order delivery: resolve correctness findings and finish ordinary meal
+logging/correction/undo; simplify one everyday mode; then products, batch recipes
+and deployment when desired. Android experimentation remains deferred.
 Automatic public submission and rare food administration may use the app first.
 Keep short write journals, read-back, units and unknown nutrients correct; avoid
 enterprise infrastructure and repeated technical approvals.
@@ -52,6 +63,11 @@ MCP is the interface, not the policy engine. Ranking, units, permissible writes,
 
 ### Gate 1: existing-assistant access
 
+Historical feasibility questions below were written on 16 November. The installed
+ChatGPT tunnel has since passed real lookup, totals and draft tool checks. Complete
+mobile voice acceptance remains open; old plan/account descriptions below are not
+a freshly verified statement of current host availability.
+
 Check the user’s actual account for custom MCP tools with writes. OpenAI’s current documentation describes full custom MCP access for Business and Enterprise/Edu; do not assume a personal Plus account has equivalent access. Separately test whether the installed connection works in the phone’s Live voice experience, because general voice support does not prove this particular custom integration works there.
 
 Test a harmless draft-only tool first, including a Hebrew/English exchange and an attached label photograph. Count required taps, especially action approvals. OpenAI documents on-screen approval for actions that require confirmation; do not promise a completely hands-free workflow.
@@ -79,7 +95,7 @@ Exit: select an honest supported representation. If native recipe behavior is un
 | Candidate | Evidence found | Decision |
 |---|---|---|
 | atticoos/cronometer-mcp | Documents search/details, diary writes, custom foods, recipe creation, session-based authentication, hosted and self-hosted deployment | Keep as an adapter candidate; its hosted service is not automatically our default |
-| rollecode/cronometer-mcp | Inspected Python tool/client source: search returns source metadata; details include measures and per-serving/per-100-g nutrients; exposes food writes and recipe operations | Useful starting point for a Python implementation, pending tests and authentication review |
+| rollecode/cronometer-mcp | Pinned optional client dependency at `e123a472`; upstream tool/client inventory reviewed on 19 November | Selected adapter, not a copied/forked application. See [capability comparison](upstream-comparison.md); upstream tool availability is not our tool availability. |
 | Official Cronometer ChatGPT integration | Read-only daily aggregates; no individual foods or diary writes | Cannot implement meal logging |
 
 The Python candidate’s default weight-based recipe path stores summed nutrition as a custom food and preserves ingredients in notes rather than as an editable native ingredient list. Its alternate recipe path has documented serving/weight limitations. This is a connector-specific implementation issue, not an established limitation of all Cronometer integrations.
@@ -138,7 +154,7 @@ Treat these as separate features. A custom food saved in the user's Cronometer a
 2. **Offer submission to the public CRDB separately.** Prepare the verified custom food, barcode, clear front and nutrition-label images, and optional notification preference. Submit only when the user explicitly asks to share that product information. Track prepared, submitted/pending, accepted, rejected, or unknown status where the available interface permits; do not promise acceptance, approval timing, or public barcode availability before publication. Exclude homemade recipes and unsupported estimates from public submission.
 3. **Check implementation feasibility.** Review whether the selected connector actually supports publication, evidence-image upload and submission status. No supported submission API is assumed. If automation is unavailable, prepare the package and guide the user through Cronometer's documented Publish Food flow. The private custom food remains usable while curation is pending.
 
-Add proposed tools `create_verified_cronometer_food`, `prepare_public_food_submission`, and `submit_food_for_review`; expose only implemented capabilities. Submission and creation need independent IDs/journals, duplicate protection, and separate outcomes. Never equate a local draft, a saved private food, a submitted food, and an approved public database record.
+Product mode already exposes `create_verified_cronometer_food` and `prepare_public_food_submission` (a manual checklist). `submit_food_for_review` remains a proposed, unavailable tool; native barcode lookup/linkage is also pending. Submission and creation need independent IDs/journals, duplicate protection, and separate outcomes. Never equate a local draft, a saved private food, a submitted food, and an approved public database record.
 
 Acceptance: an absent packaged product can be created from a bilingual label, found again by identity/barcode where supported, and logged at the correct weight without a repeated photo request. A separately authorized submission sends only product information and evidence, while clearly reporting that Cronometer controls publication. An existing packaged food must also pass an exact-variant label comparison as a positive control.
 
@@ -146,14 +162,14 @@ Reference: [Cronometer's publishing workflow](https://support.cronometer.com/hc/
 
 ## Product photos: retain privately, offer submission separately
 
-Product evidence is retained even if the user declines public submission. For the current pilot, the host can retain the original photos and materialize private local copies; the MCP server itself has no image-intake/archive or upload tool yet. Never turn a photo reference or a checklist into a claim that Cronometer received the image.
+Product evidence must be retained even if the user declines public submission. Product mode now has inbox import, private archive and evidence-review tools. Automatic delivery of chat attachments into that inbox and native Cronometer upload are still absent. Never turn a photo reference or a checklist into a claim that bytes were archived or Cronometer received the image.
 
-### Next implementation: durable evidence attached to the product
+### Evidence requirements and remaining delivery work
 
 - Store original package-front, nutrition-table and barcode photos under private application data, outside Git. Also retain an existing durable host/Library reference when available; do not create duplicate Library items for already retained photos.
 - Associate evidence with the proposal ID, eventual Cronometer food ID and label/formulation version. Record role, SHA-256, MIME type, byte size and original filename. Use content-based duplicate detection and preserve both original evidence and any separately prepared submission copy.
-- Add a supported host-to-service transfer/import path rather than making the model reconstruct image bytes or exposing arbitrary server paths. Validate file type and size, install files atomically with private permissions, and test restart, duplicate attachment and incomplete transfer behavior. A reference-only record must explicitly distinguish retained host bytes from verified local bytes.
-- Expose an evidence review tool returning roles, durable references and missing requirements. It must distinguish privately archived, attached/uploaded to Cronometer, and included in a submitted review request. Read-back of a food alone verifies none of these image states.
+- Inbox import is implemented; add automatic supported host-to-service delivery rather than making the model reconstruct image bytes or exposing arbitrary server paths. Validate file type and size, install files atomically with private permissions, and test restart, duplicate attachment and incomplete transfer behavior. A reference-only record must explicitly distinguish retained host bytes from verified local bytes.
+- The implemented evidence review tool returns roles, durable references and missing requirements. It must distinguish privately archived, attached/uploaded to Cronometer, and included in a submitted review request. Read-back of a food alone verifies none of these image states.
 
 ### Assistant policy and submission journal
 
@@ -196,7 +212,11 @@ Recipe changes create a new version by default. Before modifying shared custom f
 
 Draft states: collecting, needs clarification, ready, writing, committed, partially written, or needs reconciliation. Cooking drafts do not contribute to Cronometer intake. “I ate half” commits the appropriate portion. “Actually 200 grams” corrects the associated event rather than adding another meal. Detect whether “another half” means an additional portion or a revised total before writing.
 
-## Proposed initial MCP tools
+## Original proposed MCP tools (design names, not current registration)
+
+Current modes and limitations are in the [roadmap](pr-map.md). In particular, live
+logging uses `log_meal`; correction and undo are per-item tools. The names below
+remain the original interface proposal, not instructions to call unavailable tools.
 
 | Tool | Purpose |
 |---|---|
@@ -239,42 +259,36 @@ High-value validation scenarios: dry/cooked rice; exact Israeli dairy product; H
 
 Suggested pilot targets, to calibrate with use rather than guarantee: familiar meals usually need no product questions; an ordinary unfamiliar meal needs at most one or two clarification turns; label capture is a one-time cost per product/version; every write has a verifiable result. Measure time, questions, screen taps, incorrect matches, duplicate entries, and connection failures. Record uncertainty instead of promising laboratory accuracy.
 
-## Open implementation batch (17 November 2026)
+## Current delivery state and next work
 
-The [PR map](pr-map.md) records the dependency order and morning acceptance checks.
-Open PRs #8–#13 implement the map, private evidence import/review, persisted
-submission choices and manual outcomes, snapshot-based adoption of manual food
-repairs, real-food local drafts, and consistent backup/isolated restore. These
-remain feature-branch implementations, awaiting individual live review and merge.
+PR #15 integrated the former #7–#14 stack. Their code is on main even though
+#8–#14 retain open historical stacked PR records. PR #16 added the live meal pilot.
+Do not re-merge the old stack. Requirements R15–R35 in the [roadmap](pr-map.md)
+retain the original planning slots without confusing them with actual PR numbers.
 
-The deployed/main capabilities described above are unchanged until deployment.
-There is still no automatic transfer of chat attachments into the configured
-inbox, native barcode write, automatic Cronometer photo upload/public submission,
-remote food-edit tool or real diary write. Manual food repair adoption changes our
-local journal only. Operator-reported submission receipts are not independently
-verified API results. Preserve these distinctions during morning testing.
+The [independent code review](code-review-2026-11-19.md) and
+[upstream feature comparison](upstream-comparison.md) now drive the next work:
+resolve concrete correctness/recovery findings, then perform the live ordinary-meal
+acceptance check. The baseline passes 125 automated tests; this is not evidence
+that untested account writes or every failure path are correct.
 
-## Complete follow-on PR map
+For daily use, combine product and meal tools in one supported mode and migrate
+existing state deliberately. Keep Python, SQLite, files and the tunnel. Add verified
+household measures and low-friction product reuse, then saved recipe versions and
+yield portions. Native barcode/photo/public submission and rare food administration
+remain optional automation with manual app fallbacks; retain photos privately as
+requested. Read-only targets/remaining or recent-food lookup may be useful small
+additions; exercise, fasting, target writes and broad deletion are outside scope.
 
-The [complete PR map](pr-map.md) lists the delivered work, what to test, and simple
-acceptance cases for each open PR #7–#14. Planned slots 15–35 cover all remaining
-agreed work: data/source/category/serving fidelity, automatic photo delivery,
-native barcode and photo handling, public submission/status, guarded edits and
-custom-food retirement/deletion, diary reads/writes/recovery/correction/undo,
-versioned recipes and yield portions, lower-friction dialogue, MCP compatibility,
-phone voice, authenticated always-on hosting, operational recovery and the final
-pilot. These future numbers are planning slots, not existing pull requests.
+Local draft deletion is implemented. Item-level undo for assistant-logged servings
+is implemented but not live-write accepted; whole-meal undo and native custom-food
+retirement/deletion remain separate gaps. Corrections currently change amount only.
+The review also tracks limitations after edits and during partial operations.
 
-Local draft deletion is already implemented. Native custom-food deletion and
-undo/deletion of logged diary entries remain separate future features. Neither
-may be implemented by deleting a whole diary day or silently replacing foods
-referenced by historical entries.
-
-## Immediate next implementation task
-
-Deploy the merged custom-food usability fixes and complete their live acceptance checks. Add durable photo intake/evidence review and the one-time submission-choice journal, then the reviewed existing-food correction workflow above. Keep the current creation-only transport boundary until that narrowly scoped edit path is implemented and tested. Public-submission preparation may follow user review, but direct upload/submission support remains unimplemented.
-
-The next main logging milestone is connecting real food resolution to persistent meal drafts and verified diary add/correct/undo operations. Confirm the account timezone, meal groups and duplicate recovery before the first scoped diary test. Continue the phone voice compatibility check; select always-on hosting after the phone workflow is validated.
+The current server still needs its computer awake and connected. Verify a complete
+phone workflow before choosing always-on hosting. Local supervision/restart and a
+short tested update/restore procedure matter sooner than more infrastructure.
+No new host, cloud purchase or Android setup is part of this documentation revision.
 
 ## Sources and limits
 

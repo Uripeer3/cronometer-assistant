@@ -29,3 +29,19 @@ A private session/optional credential file is sufficient; a separate secrets
 service is not required. Current login remains interactive with session reuse.
 Any optional password-file re-login needs an explicit implementation and does not
 bypass two-factor authentication.
+
+## 006 — Stabilize the personal meal flow before expanding parity
+
+The 19 November review supersedes numeric delivery ordering in the older plan.
+Fix concrete correctness/recovery findings, complete scoped live meal acceptance,
+and provide one everyday mode before expanding native product/submission features.
+Use requirement IDs in the roadmap; actual PR numbers are implementation history.
+Do not import the entire upstream MCP tool surface just because the client exposes
+it. Recent foods and read-only targets may reduce effort; exercise, fasting,
+target writes and broad deletion remain outside the meal-logging mission.
+
+One store and connection are the target, not a claim about today's separate
+`products`/`meals` modes and databases. Preserve existing data through a backed-up
+migration. Android hosting stays deferred; a host move is independent of laptop
+meal correctness. See the [audit](code-review-2026-11-19.md) and
+[capability comparison](upstream-comparison.md).
