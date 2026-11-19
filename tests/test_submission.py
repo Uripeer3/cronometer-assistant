@@ -38,7 +38,7 @@ class SubmissionTests(unittest.TestCase):
         for code in ["96385073", "036000291451", "123", "٤٠٠٦٣٨١٣٣٣٩٣١"]:
             with self.assertRaises(ValidationError):
                 validate_barcode(code)
-        self.service.create(self.pid, True)
+        self.service.create(self.pid, True, self.service.review(self.pid)["review_token"])
         before = self.store.get("product_proposals", self.pid)["payload"]
         result = self.service.set_submission_barcode(self.pid, "4006381333931")
         self.assertEqual(result["product"]["proposal_id"], self.pid)
@@ -47,7 +47,7 @@ class SubmissionTests(unittest.TestCase):
         self.assertEqual(self.client.adds, 1)
 
     def test_requested_resumes_without_reasking_and_decline_keeps_evidence(self):
-        self.service.create(self.pid, True)
+        self.service.create(self.pid, True, self.service.review(self.pid)["review_token"])
         self.assertFalse(
             self.service.public_submission_checklist(self.pid)["should_offer_submission"]
         )
@@ -100,7 +100,7 @@ class SubmissionTests(unittest.TestCase):
         self.assertEqual(self.client.adds, 0)
 
     def test_stale_remote_food_and_reference_only_evidence_do_not_pass_readiness(self):
-        self.service.create(self.pid, True)
+        self.service.create(self.pid, True, self.service.review(self.pid)["review_token"])
         self.service.set_submission_choice(self.pid, 0, "requested")
         self.service.set_submission_barcode(self.pid, "4006381333931")
         self.service.attach_evidence_reference(self.pid, "package_front", "host", "front")

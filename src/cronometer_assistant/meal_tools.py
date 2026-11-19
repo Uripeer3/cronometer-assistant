@@ -58,3 +58,14 @@ def register_meal_tools(server, service, call):
     ) -> dict:
         """Remove one verified assistant-created serving after the user confirms its removal."""
         return call(changes.undo_item, meal_id, item_index, expected_grams, confirmed=confirmed)
+
+    @server.tool(
+        annotations={"readOnlyHint": False, "destructiveHint": True, "idempotentHint": True}
+    )
+    def cancel_unsent_meal_items(meal_id: str, confirmed: bool) -> dict:
+        """Cancel only never-sent or definitively rejected items; preserve uncertain writes.
+
+        After cancellation, review cancelled items in a new draft if still wanted.
+        Never copy verified or uncertain items into a new logging attempt.
+        """
+        return call(service.cancel_pending, meal_id, confirmed=confirmed)

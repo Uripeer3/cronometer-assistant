@@ -4,7 +4,7 @@ import re
 from datetime import date, time
 from math import isclose, isfinite
 
-from .live import LiveError, LoginRequired
+from .live import LiveError, LoginRequired, MutationNotApplied
 from .models import DiaryEntry, ValidationError, number
 
 MEAL_GROUP_IDS = {"breakfast": 1, "lunch": 2, "dinner": 3, "snack": 4}
@@ -73,10 +73,27 @@ class LiveDiary:
     def _call(function, *args, **kwargs):
         try:
             return function(*args, **kwargs)
-        except LoginRequired:
+        except (LoginRequired, MutationNotApplied):
             raise
         except Exception:
             raise LiveError("Cronometer diary request failed") from None
+
+    def _mutate(self, function, *args, **kwargs):
+        self.client._mutation_request_started = False
+        try:
+            return function(*args, **kwargs)
+        except MutationNotApplied:
+            raise
+        except Exception:
+            if not self.client._mutation_request_started:
+                raise MutationNotApplied(
+                    "Mutation stopped before any write request was sent"
+                ) from None
+            raise LiveError("Mutation outcome is unknown; check the existing operation") from None
+
+    def measure_snapshot(self, params):
+        raw = self._call(self.client.get_food, int(params["food_id"].removeprefix("crono:")))
+        return next(dict(row) for row in raw["measures"] if row["id"] == params["measure_id"])
 
     def prepare(self, item, meal, selection):
         numeric_id = int(item["food_id"].removeprefix("crono:"))
@@ -146,7 +163,7 @@ class LiveDiary:
         return [entry for entry, _ in self._servings(day)]
 
     def add(self, *, food_id, grams, day, meal_group, local_time, measure_id, translation_id):
-        result = self._call(
+        result = self._mutate(
             self.client.add_serving,
             int(food_id.removeprefix("crono:")),
             measure_id,
@@ -165,18 +182,18 @@ class LiveDiary:
         )
 
     def edit_amount(self, entry, grams):
-        row = self._validate_target(entry)
-        self._call(
+        row = self._target_before_mutation(entry)
+        self._mutate(
             self.client._request,
             "/api/v2/edit_serving",
             {"serving": {**row, "grams": number(grams, "grams", positive=True)}},
         )
 
     def delete(self, entry):
-        row = self._validate_target(entry)
+        row = self._target_before_mutation(entry)
         payload = {key: value for key, value in row.items() if key != "meta"}
         payload["id"] = row["servingId"]
-        result = self._call(
+        result = self._mutate(
             self.client._request_v3,
             "DELETE",
             "/diary-entries",
@@ -184,6 +201,14 @@ class LiveDiary:
         )
         if result.status_code != 204:
             raise LiveError("Cronometer did not acknowledge the serving removal")
+
+    def _target_before_mutation(self, entry):
+        try:
+            return self._validate_target(entry)
+        except Exception:
+            raise MutationNotApplied(
+                "Target could not be verified before sending the change"
+            ) from None
 
     def _validate_target(self, target):
         for entry, row in self._servings(target.day):

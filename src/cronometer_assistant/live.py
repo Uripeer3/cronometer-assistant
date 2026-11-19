@@ -25,6 +25,10 @@ class LiveError(Exception):
     """A scrubbed diagnostic safe to return to the assistant."""
 
 
+class MutationNotApplied(LiveError):
+    """Our transport proves this mutation was not sent or was explicitly rejected."""
+
+
 class LoginRequired(LiveError):
     pass
 
@@ -212,9 +216,43 @@ def create_client(
                 allow_product_creation=allow_product_creation,
                 diary_account=client._user_id if allow_diary else None,
             )
-            return super().request(method, url, **kwargs)
+            mutation = str(url) in {"/api/v2/add_serving", "/api/v2/edit_serving"} or (
+                method.upper() == "DELETE" and str(url).endswith("/diary-entries")
+            )
+            if mutation:
+                client._mutation_request_started = True
+            response = super().request(method, url, **kwargs)
+            if mutation and response.status_code in {401, 403}:
+                raise MutationNotApplied("Cronometer rejected this mutation; sign in locally")
+            if mutation and response.status_code == 200:
+                try:
+                    data = response.json()
+                except ValueError:
+                    data = None
+                if isinstance(data, dict) and data.get("result") in {"FAIL", "FAILURE"}:
+                    raise MutationNotApplied("Cronometer explicitly rejected this mutation")
+            return response
 
     class LocalSessionClient(CronometerClient):
+        def get_nutrition_scores(self, day=None, *, include_supplements=True):
+            # Upstream defaults a missing diary to []; validate the same response used here.
+            from datetime import datetime
+
+            from .live_diary import LiveDiary
+
+            day = day or datetime.now(ZoneInfo(account_timezone(self._timezone))).date()
+            rows = LiveDiary(self)._servings(day.isoformat())
+            return self._request(
+                "/api/v2/get_nutrition_scores",
+                {
+                    "startDay": "1900-1-1",
+                    "endDay": "1900-1-1",
+                    "servingIds": [row["servingId"] for _, row in rows],
+                    "supplements": "true" if include_supplements else "false",
+                    "config": {"call_version": 1},
+                },
+            )
+
         def _recipe_entry_units(self, food_id):
             units = super()._recipe_entry_units(food_id)
             if allow_diary and units is not None:

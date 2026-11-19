@@ -187,8 +187,8 @@ class ProductTests(unittest.TestCase):
         pid = self.proposal()
         self.assertEqual(pid, self.proposal())
         with self.assertRaises(ValidationError):
-            self.service.create(pid, False)
-        result = self.service.create(pid, True)
+            self.service.create(pid, False, self.service.review(pid)["review_token"])
+        result = self.service.create(pid, True, self.service.review(pid)["review_token"])
         self.assertTrue(result["created"])
         self.assertFalse(result["real_diary_changed"])
         self.assertFalse(result["barcode_linked"])
@@ -200,24 +200,32 @@ class ProductTests(unittest.TestCase):
         self.assertNotIn("synthetic-secret", json.dumps(stored))
         self.assertNotIn("payload", result["product"])
         restarted = ProductService(Store(self.store.path), self.client)
-        self.assertTrue(restarted.create(pid, True)["already_created"])
+        self.assertTrue(
+            restarted.create(pid, True, restarted.review(pid)["review_token"])["already_created"]
+        )
         self.assertEqual(self.client.adds, 1)
 
     def test_timeout_never_blindly_repeats_and_marker_allows_reconciliation(self):
         pid = self.proposal()
         self.client.timeout_after_create = True
-        result = self.service.create(pid, True)
+        result = self.service.create(pid, True, self.service.review(pid)["review_token"])
         self.assertTrue(result["retry_blocked"])
         self.assertNotIn("synthetic-secret", json.dumps(result))
         restarted = ProductService(Store(self.store.path), self.client)
-        self.assertTrue(restarted.create(pid, True)["retry_blocked"])
+        self.assertTrue(
+            restarted.create(pid, True, restarted.review(pid)["review_token"])["retry_blocked"]
+        )
         self.assertEqual(self.client.adds, 1)
         self.assertTrue(restarted.reconcile(pid, 123)["created"])
-        self.assertTrue(restarted.create(pid, True)["already_created"])
+        self.assertTrue(
+            restarted.create(pid, True, restarted.review(pid)["review_token"])["already_created"]
+        )
 
     def test_weight_serving_supports_arbitrary_grams_and_matching_label_display(self):
         pid = self.proposal()
-        self.assertTrue(self.service.create(pid, True)["created"])
+        self.assertTrue(
+            self.service.create(pid, True, self.service.review(pid)["review_token"])["created"]
+        )
         raw = self.client.get_food(123)
         self.assertEqual(raw["category"], 5)
         self.assertEqual(raw["labelType"], "EU")
@@ -240,10 +248,12 @@ class ProductTests(unittest.TestCase):
         first = self.service.prepare(*args, carbohydrate_basis="excludes_fiber")
         pid = first["product"]["proposal_id"]
         with self.assertRaisesRegex(ValidationError, "category_id"):
-            self.service.create(pid, True)
+            self.service.create(pid, True, self.service.review(pid)["review_token"])
         completed = self.service.prepare(*args, carbohydrate_basis="excludes_fiber", category_id=5)
         self.assertEqual(pid, completed["product"]["proposal_id"])
-        self.assertTrue(self.service.create(pid, True)["created"])
+        self.assertTrue(
+            self.service.create(pid, True, self.service.review(pid)["review_token"])["created"]
+        )
         self.assertEqual(self.client.adds, 1)
         for category in (-1, True, 5.5):
             with self.subTest(category=category), self.assertRaises(ValidationError):
@@ -258,7 +268,9 @@ class ProductTests(unittest.TestCase):
             carbohydrate_basis="includes_fiber",
             category_id=0,
         )["product"]["proposal_id"]
-        self.assertTrue(self.service.create(pid, True)["created"])
+        self.assertTrue(
+            self.service.create(pid, True, self.service.review(pid)["review_token"])["created"]
+        )
         raw = self.client.get_food(123)
         self.assertEqual(raw["labelType"], "AMERICAN_2016")
         self.assertEqual(next(n["amount"] for n in raw["nutrients"] if n["id"] == 205), 30)
@@ -281,10 +293,14 @@ class ProductTests(unittest.TestCase):
                 product["state"] = "prepared"
                 product.pop("remote_food_id", None)
                 self.store.put("product_proposals", pid, product)
-                self.assertTrue(self.service.create(pid, True)["created"])
+                self.assertTrue(
+                    self.service.create(pid, True, self.service.review(pid)["review_token"])[
+                        "created"
+                    ]
+                )
                 mutate(self.client.foods[123])
                 count = self.client.adds
-                result = self.service.create(pid, True)
+                result = self.service.create(pid, True, self.service.review(pid)["review_token"])
                 self.assertFalse(result["created"])
                 self.assertEqual(result["product"]["state"], "needs_reconciliation")
                 self.assertFalse(result["remote_food_changed"])
@@ -292,7 +308,7 @@ class ProductTests(unittest.TestCase):
 
     def test_metadata_changes_never_create_a_second_food(self):
         pid = self.proposal()
-        self.service.create(pid, True)
+        self.service.create(pid, True, self.service.review(pid)["review_token"])
         again = self.service.prepare(
             "Synthetic Brand, Cocoa",
             100,
@@ -304,7 +320,11 @@ class ProductTests(unittest.TestCase):
         )
         self.assertEqual(again["product"]["proposal_id"], pid)
         self.assertEqual(again["product"]["category_id"], 5)
-        self.assertTrue(self.service.create(pid, True)["already_created"])
+        self.assertTrue(
+            self.service.create(pid, True, self.service.review(pid)["review_token"])[
+                "already_created"
+            ]
+        )
         self.assertEqual(self.client.adds, 1)
 
     def test_crash_leaves_durable_marker(self):
@@ -320,25 +340,29 @@ class ProductTests(unittest.TestCase):
         self.client._request = crash
         pid = self.proposal()
         with self.assertRaises(Crash):
-            self.service.create(pid, True)
+            self.service.create(pid, True, self.service.review(pid)["review_token"])
         self.assertEqual(self.store.get("product_proposals", pid)["state"], "sending")
         restarted = ProductService(Store(self.store.path), self.client)
-        self.assertTrue(restarted.create(pid, True)["retry_blocked"])
+        self.assertTrue(
+            restarted.create(pid, True, restarted.review(pid)["review_token"])["retry_blocked"]
+        )
         self.assertEqual(self.client.adds, 1)
 
     def test_known_id_read_failure_can_retry_only_verification(self):
         pid = self.proposal()
         self.client.fail_read = True
-        result = self.service.create(pid, True)
+        result = self.service.create(pid, True, self.service.review(pid)["review_token"])
         self.assertEqual(result["product"]["state"], "needs_verification")
         self.client.fail_read = False
-        self.assertTrue(self.service.create(pid, True)["created"])
+        self.assertTrue(
+            self.service.create(pid, True, self.service.review(pid)["review_token"])["created"]
+        )
         self.assertEqual(self.client.adds, 1)
 
     def test_unexpected_remote_change_and_wrong_marker_cannot_pass(self):
         pid = self.proposal()
         self.client.timeout_after_create = True
-        self.service.create(pid, True)
+        self.service.create(pid, True, self.service.review(pid)["review_token"])
         self.client.foods[123]["comments"] = "another operation"
         with self.assertRaises(ValidationError):
             self.service.reconcile(pid, 123)
@@ -351,7 +375,7 @@ class ProductTests(unittest.TestCase):
         for key, unit in [("unrecognized", "g"), ("cronometer_324", "ug")]:
             pid = self.proposal({key: {"amount": 4, "unit": unit}})
             with self.assertRaises(ValidationError):
-                self.service.create(pid, True)
+                self.service.create(pid, True, self.service.review(pid)["review_token"])
             self.assertEqual(self.service.review(pid)["product"]["state"], "prepared")
         self.assertEqual(self.client.adds, 0)
 
@@ -364,7 +388,14 @@ class ProductTests(unittest.TestCase):
     def test_concurrent_calls_share_single_creation(self):
         pid = self.proposal()
         with ThreadPoolExecutor(max_workers=4) as executor:
-            results = list(executor.map(lambda _: self.service.create(pid, True), range(4)))
+            results = list(
+                executor.map(
+                    lambda _: self.service.create(
+                        pid, True, self.service.review(pid)["review_token"]
+                    ),
+                    range(4),
+                )
+            )
         self.assertTrue(all(r["created"] for r in results))
         self.assertEqual(self.client.adds, 1)
 
@@ -395,9 +426,9 @@ class ProductTests(unittest.TestCase):
         altered["energy"]["amount"] = 321
         second = self.proposal(altered)
         self.client.timeout_after_create = True
-        self.service.create(first, True)
+        self.service.create(first, True, self.service.review(first)["review_token"])
         with self.assertRaises(ValidationError):
-            self.service.create(second, True)
+            self.service.create(second, True, self.service.review(second)["review_token"])
         with self.assertRaises(ValidationError):
             self.proposal(altered)
         self.assertEqual(self.client.adds, 1)

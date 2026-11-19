@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 from .backend import DemoDiary, DiaryBackend, NoDiary
 from .catalog import Catalog, DemoCatalog, rank_foods
+from .live import MutationNotApplied
 from .models import DiaryEntry, Food, MealItem, ValidationError, normalized, text
 from .nutrition import normalize_label, summarize
 from .store import Store
@@ -105,8 +106,10 @@ class MealService:
         alias = self.store.get("aliases", normalized(query))
         candidates = self.catalog.search(query)
         remembered_id = alias["food_id"] if alias else None
-        if remembered_id and remembered_id not in {food.food_id for food in candidates}:
-            candidates.append(self.catalog.get(remembered_id))
+        if remembered_id:
+            remembered = self._item_food(alias)
+            candidates = [f for f in candidates if f.food_id != remembered_id]
+            candidates.append(remembered)
         return self.response(
             candidates=rank_foods(
                 candidates,
@@ -119,11 +122,18 @@ class MealService:
             selection_required=True,
         )
 
-    def remember_product(self, alias: str, food_id: str) -> dict:
+    def _item_food(self, item):
+        return self.catalog.get(item["food_id"])
+
+    def remember_product(self, alias: str, food_id: str, selection_id=None) -> dict:
         alias = text(alias, "alias", 200)
-        self.catalog.get(food_id)
+        food = self._item_food({"food_id": food_id, "selection_id": selection_id})
         with self.store.locked():
-            self.store.put("aliases", normalized(alias), {"alias": alias, "food_id": food_id})
+            self.store.put(
+                "aliases",
+                normalized(alias),
+                {"alias": alias, "food_id": food_id, "selection_id": food.selection_id},
+            )
         return self.response(alias=alias, food_id=food_id)
 
     def update_meal(
@@ -146,7 +156,7 @@ class MealService:
             raise ValidationError("Malformed meal item fields") from error
         for item in parsed:
             if item.food_id:
-                self.catalog.get(item.food_id)
+                self._item_food(item.to_dict())
         if pending_questions is not None and not isinstance(pending_questions, list):
             raise ValidationError("pending_questions must be a list")
         questions = (
@@ -201,7 +211,7 @@ class MealService:
                     }
                 )
                 continue
-            food = self.catalog.get(item.food_id)
+            food = self._item_food(item.to_dict())
             if item.grams is None:
                 questions.append(
                     {
@@ -346,6 +356,17 @@ class MealService:
     def _planned_steps(self, meal, review_token):
         return [{"item": row, "state": "pending"} for row in meal["items"]]
 
+    def _validate_pending_step(self, meal, step):
+        pass
+
+    @staticmethod
+    def _completed_state(operation):
+        return (
+            "completed_with_cancellations"
+            if any(s["state"] == "cancelled" for s in operation["steps"])
+            else "committed"
+        )
+
     def _matches_step(self, entry, step, meal):
         return self._matches(entry, step["item"], meal)
 
@@ -359,7 +380,7 @@ class MealService:
             operation = self.store.get("operations", meal_id)
             if operation and operation.get("review_token") != review_token:
                 raise ValidationError("Use the review token from this logging operation")
-            if operation and operation["state"] == "committed":
+            if operation and operation["state"] in {"committed", "completed_with_cancellations"}:
                 return self.response(operation=operation, already_logged=True)
             if operation is None:
                 if not self._review(meal)["ready_to_log"]:
@@ -375,13 +396,22 @@ class MealService:
                     operation["review_token"] = review_token
                 self._persist_operation(meal, operation, "writing")
             for step in operation["steps"]:
-                if step["state"] == "verified":
+                if step["state"] in {"verified", "cancelled"}:
                     continue
-                if step["state"] in {"sending", "uncertain"}:
+                if step["state"] in {"sending", "uncertain", "not_applied"}:
                     # The last attempt might have reached the remote diary. Never add it again.
                     self._persist_operation(meal, operation, "needs_reconciliation")
                     return self.response(operation=operation, retry_blocked=True)
                 if step["state"] == "pending":
+                    try:
+                        self._validate_pending_step(meal, step)
+                    except Exception:
+                        self._persist_operation(meal, operation, "needs_review")
+                        return self.response(
+                            operation=operation,
+                            retry_blocked=True,
+                            next_step="Pending food/measure/timezone changed or could not be checked. Recheck, or cancel unsent items and review them in a new draft.",
+                        )
                     try:
                         before = self.diary.entries(meal["day"])
                     except Exception:
@@ -399,6 +429,15 @@ class MealService:
                             "meal_group": meal["meal_group"],
                         }
                         entry = self.diary.add(**params)
+                    except MutationNotApplied:
+                        step["state"] = "not_applied"
+                        step["failure_kind"] = "definitively_not_applied"
+                        self._persist_operation(meal, operation, "needs_review")
+                        return self.response(
+                            operation=operation,
+                            retry_blocked=True,
+                            next_step="This attempt was not applied. Cancel this unsent item and review a fresh draft before another attempt.",
+                        )
                     except Exception:
                         # Persist no exception text: it might include credentials or request data.
                         step["state"] = "uncertain"
@@ -421,7 +460,7 @@ class MealService:
                     return self.response(operation=operation, retry_blocked=True)
                 step["state"] = "verified"
                 self._persist_operation(meal, operation, "writing")
-            self._persist_operation(meal, operation, "committed")
+            self._persist_operation(meal, operation, self._completed_state(operation))
             return self.response(operation=operation, already_logged=False)
 
     def reconcile_entry(self, meal_id: str, item_index: int, entry_id: str) -> dict:
@@ -451,8 +490,8 @@ class MealService:
                 raise ValidationError("Entry does not match this item, amount, date, and group")
             step["entry_id"], step["state"] = entry_id, "verified"
             state = (
-                "committed"
-                if all(s["state"] == "verified" for s in operation["steps"])
+                self._completed_state(operation)
+                if all(s["state"] in {"verified", "cancelled"} for s in operation["steps"])
                 else "writing"
             )
             self._persist_operation(meal, operation, state)
