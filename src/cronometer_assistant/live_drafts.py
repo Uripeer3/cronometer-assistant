@@ -8,7 +8,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from .catalog import CronometerReadOnlyCatalog
-from .live import LiveError, account_timezone
+from .live import LiveError, account_timezone, fresh_account_timezone
 from .live_diary import LiveDiary
 from .live_diary import local_time as validated_time
 from .models import Food, ValidationError, normalized, text
@@ -70,6 +70,8 @@ class ReviewedCatalog:
         return replace(food, preparation=preparation, selection_id=selection_id, **selection)
 
     def get_selection(self, food_id, selection_id=None):
+        if selection_id is not None:
+            selection_id = text(selection_id, "selection_id", 200)
         if selection_id is None:
             matches = [
                 r
@@ -242,7 +244,7 @@ class LiveMealService(LiveDraftService):
         return review
 
     def _plan(self, meal):
-        if account_timezone(self.client._timezone) != meal["timezone"]:
+        if fresh_account_timezone(self.client) != meal["timezone"]:
             raise ValidationError("Cronometer's timezone changed; review the date and time again")
         result = []
         for item in meal["items"]:
@@ -305,7 +307,7 @@ class LiveMealService(LiveDraftService):
         return steps
 
     def _validate_pending_step(self, meal, step):
-        if account_timezone(self.client._timezone) != meal["timezone"]:
+        if fresh_account_timezone(self.client) != meal["timezone"]:
             raise ValidationError("Account timezone changed")
         food = self._item_food(step["item"])
         params = self.diary.prepare(step["item"], meal, {"translation_id": food.translation_id})

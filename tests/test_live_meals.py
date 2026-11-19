@@ -37,6 +37,7 @@ class LiveMealTests(unittest.TestCase):
         session = root / "private" / "session.json"
         SessionFile(session).write(7, "synthetic-session", "Asia/Damascus")
         self.food = {**FOOD}
+        self.profile_timezone = "Asia/Damascus"
         self.servings = []
         self.writes = []
         self.timeout_after_add = False
@@ -47,6 +48,8 @@ class LiveMealTests(unittest.TestCase):
         def respond(request):
             path = request.url.path
             payload = json.loads(request.content)
+            if path == "/api/v2/get_profile":
+                return httpx.Response(200, json={"timezone": self.profile_timezone})
             if path == "/api/v2/find_food":
                 return httpx.Response(
                     200,

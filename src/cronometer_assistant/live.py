@@ -18,7 +18,9 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from .models import ValidationError, number, text
 
 READ_ENDPOINTS = frozenset({"/api/v2/find_food", "/api/v2/get_food", "/api/v2/get_nutrients"})
-DIARY_READ_ENDPOINTS = frozenset({"/api/v2/get_diary", "/api/v2/get_nutrition_scores"})
+DIARY_READ_ENDPOINTS = frozenset(
+    {"/api/v2/get_diary", "/api/v2/get_nutrition_scores", "/api/v2/get_profile"}
+)
 
 
 class LiveError(Exception):
@@ -119,6 +121,21 @@ def account_timezone(value: object) -> str:
     except (ZoneInfoNotFoundError, ValueError):
         raise LiveError("Cronometer supplied an unsupported account timezone") from None
     return value
+
+
+def fresh_account_timezone(client) -> str:
+    """Read only the account timezone from a fresh profile; never expose the profile."""
+    try:
+        profile = client.get_profile()
+        if not isinstance(profile, dict):
+            raise ValueError
+        return account_timezone(profile.get("timezone"))
+    except LoginRequired:
+        raise
+    except Exception:
+        raise LiveError(
+            "Account timezone could not be verified; reconnect or sign in locally"
+        ) from None
 
 
 class SessionFile:

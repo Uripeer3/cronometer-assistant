@@ -67,8 +67,21 @@ class SelectionRegressionTests(unittest.TestCase):
             self.service.update_meal(
                 meal["meal_id"], expected_revision=1, items=[{**item, "grams": 60}]
             )
-        with self.assertRaisesRegex(ValidationError, "selection_id"):
-            self.service.remember_product("usual", "crono:5")
+        for invalid in (None, "", "   ", 0, False):
+            with (
+                self.subTest(selection=invalid),
+                self.assertRaisesRegex(ValidationError, "selection_id"),
+            ):
+                self.service.remember_product("usual", "crono:5", invalid)
+            with (
+                self.subTest(selection=invalid),
+                self.assertRaisesRegex(ValidationError, "selection_id"),
+            ):
+                self.service.update_meal(
+                    meal["meal_id"],
+                    expected_revision=1,
+                    items=[{**item, "grams": 60, "selection_id": invalid}],
+                )
         result = self.service.review_meal(meal["meal_id"])
         self.assertEqual(result["review"]["entries"][0]["food_name"], "Variant 77")
         self.assertEqual(result["meal"]["items"][0]["selection_id"], selected["selection_id"])
@@ -85,6 +98,7 @@ class MealRecoveryRegressionTests(unittest.TestCase):
         for mutation in ("nutrients", "measure", "retired", "timezone", "legacy"):
             with self.subTest(mutation=mutation):
                 self.food = deepcopy(FOOD)
+                self.profile_timezone = "Asia/Damascus"
                 self.client._timezone = "Asia/Damascus"
                 self.meals = LiveMealService(Store(self.db), self.client)
                 key, token = self.draft()
@@ -98,7 +112,8 @@ class MealRecoveryRegressionTests(unittest.TestCase):
                 elif mutation == "retired":
                     self.food["retired"] = True
                 elif mutation == "timezone":
-                    self.client._timezone = "UTC"
+                    self.profile_timezone = "UTC"
+                    self.assertEqual(self.client._timezone, "Asia/Damascus")
                 else:
                     operation = self.meals.store.get("operations", key)
                     operation["steps"][0].pop("food_profile")
