@@ -126,3 +126,11 @@ automatically recreates an undone entry.
 
 These findings are documented, **not fixed**, by this PR. Runtime availability is
 verified separately at handoff; a running server does not close these acceptance gaps.
+
+## Sequence 1 follow-up
+
+The findings above describe the original audited baseline. Sequence 1 addresses
+F1–F6 and A1 with focused synthetic regressions; see [recovery semantics](sequence-1-recovery.md)
+and the [current roadmap](pr-map.md). Ambiguous network outcomes still deliberately
+block replay; only proven non-application can be cancelled/reconfirmed. No live
+acceptance is implied by the fixes or passing tests.

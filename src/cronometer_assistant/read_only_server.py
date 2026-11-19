@@ -152,13 +152,15 @@ def create_read_only_server(
         @server.tool(
             annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True}
         )
-        def create_verified_cronometer_food(proposal_id: str, reviewed: bool) -> dict:
+        def create_verified_cronometer_food(
+            proposal_id: str, reviewed: bool, review_token: str
+        ) -> dict:
             """Create a NEW private food after user review; never edits a food or diary.
 
             Repeated requests reuse the same journal. On an uncertain result do not
             create another proposal or retry the remote addition.
             """
-            return call(product_service.create, proposal_id, reviewed)
+            return call(product_service.create, proposal_id, reviewed, review_token)
 
         @server.tool(annotations={"readOnlyHint": False, "destructiveHint": False})
         def reconcile_created_food(proposal_id: str, food_id: int) -> dict:

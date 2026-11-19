@@ -2,6 +2,7 @@
 
 Updated 19 November 2026. Audited baseline: `main` at
 `e57a534b95f52d121589107e1aa30e81015a081c` (merged PR #16).
+Sequence 1 implements the audit corrections below; live pilot acceptance is tracked separately.
 This is one person's meal-logging utility: one Python service, SQLite, private
 files and the existing MCP tunnel. Complete the everyday flow before adding more
 interfaces. Android hosting is deferred at the user's request.
@@ -32,14 +33,14 @@ whatever number GitHub assigns; do not reserve a long chain of branches.
 |---|---|---|
 | PRs [#1](https://github.com/Uripeer3/cronometer-assistant/pull/1)–[#6](https://github.com/Uripeer3/cronometer-assistant/pull/6): demo, tunnel, hidden login, real lookup, private food creation and serving/category/label fixes | Implemented | Earlier bilingual demo, real food inspection, controlled custom-food creation and manual app repair exercised. This is not proof of all foods or nutrient conventions. |
 | [#7](https://github.com/Uripeer3/cronometer-assistant/pull/7): retain photos and offer submission separately | Policy implemented, integrated | Policy does not transfer photos or publish foods. Verify an existing request/decline is respected. |
-| [#8](https://github.com/Uripeer3/cronometer-assistant/pull/8): scope and complete plan | Integrated through #15; superseded status updated here | Its GitHub PR remains open against its historical stacked base. Do not merge the stack again. |
+| [#8](https://github.com/Uripeer3/cronometer-assistant/pull/8): scope and complete plan | Integrated through #15; superseded status updated here | Closed as superseded after confirming its head was integrated through #15. |
 | [#9](https://github.com/Uripeer3/cronometer-assistant/pull/9): private evidence archive | Implemented through #15 | Synthetic import/hash/dedup/restart tests. Requires files already in a private inbox; chat attachment delivery remains pending. |
 | [#10](https://github.com/Uripeer3/cronometer-assistant/pull/10): submission choice, local barcode and manual outcome | Implemented through #15 | Synthetic revision/choice/checksum tests. No native barcode linkage or API submission; reported outcomes are operator observations. |
 | [#11](https://github.com/Uripeer3/cronometer-assistant/pull/11): adopt manual food repairs | Implemented through #15 | Snapshot/conflict tests; adoption updates our journal, not Cronometer. Live same-food repair/adoption still needs a full recorded drill. |
 | [#12](https://github.com/Uripeer3/cronometer-assistant/pull/12): real-food drafts and aliases | Implemented through #15 | Real food lookup and bilingual/local draft checks exercised; changed-profile and account-bound tests. Repeated-product friction needs a real-meal pilot. |
 | [#13](https://github.com/Uripeer3/cronometer-assistant/pull/13): backup and isolated restore | Implemented through #15 | Synthetic SQLite/evidence integrity tests. Actual selected runtime backup/restore and reauthentication drill pending. |
-| [#14](https://github.com/Uripeer3/cronometer-assistant/pull/14): launcher wiring and bounded download retry | Implemented through #15 | Automated mode/inbox/download tests. Durable restart supervision remains pending. |
-| [#15](https://github.com/Uripeer3/cronometer-assistant/pull/15): foundation integration | Merged | Integrated #7–#14; 110 tests and CI passed at integration. #8–#14 still have open historical PR records, despite their code being on main. Closing those as superseded is housekeeping, not missing implementation. |
+| [#14](https://github.com/Uripeer3/cronometer-assistant/pull/14): launcher wiring and bounded download retry | Implemented through #15 | Automated mode/inbox/download tests. A systemd user service is now installed and a read-only MCP call succeeded; sleep/wake acceptance remains pending. |
+| [#15](https://github.com/Uripeer3/cronometer-assistant/pull/15): foundation integration | Merged | Integrated #7–#14; 110 tests and CI passed at integration. #8–#14 were closed as superseded after verifying their exact heads are ancestors of main. |
 | [#16](https://github.com/Uripeer3/cronometer-assistant/pull/16): live meal pilot | Merged; live-write acceptance pending | Reviewed add, recovery, daily totals, amount correction and per-item undo; 125 automated tests passed. Live food/daily-total reads and unconfirmed-write refusal exercised. No actual diary add/correct/delete acceptance yet. |
 
 ## Available modes and their limits
@@ -69,8 +70,8 @@ proven in the live adapter merely because demo ranking tests pass.
 
 | Sequence | Proposed PR scope | Completion check |
 |---|---|---|
-| 1 | Fix audit correctness/recovery findings (A1–A4, A9–A10), using the existing journal and adapters | Focused regression tests plus the full suite; no false success, lost identity or invented nutrient zero |
-| 2 | Finish the ordinary-meal pilot (R15, R23–R27, R35) | One scoped live meal: inspect date/time/group/grams and non-empty daily totals, repeat without duplication, correct and undo only its entries |
+| 1 | Implemented: audit correctness/recovery findings (A1–A4, A9–A10), using the existing journal and adapters | 137 synthetic tests pass, including focused audit regressions and pinned-client HTTP cases. Two independent reviews (internal and upstream comparison); live acceptance remains sequence 2. |
+| 2 | Finish the ordinary-meal pilot (R15, R23–R27, R35); bring forward the custom-food-in-meal flow from A5 after the reported chocolate limitation | One scoped live meal: inspect date/time/group/grams and non-empty daily totals, repeat without duplication, correct and undo only its entries |
 | 3 | One everyday mode and reliable local start/update (A5, R31, R34) | Product creation and meal logging work in one conversation; restart retains all state; refreshed tools match the running revision |
 | 4 | Reduce meal-entry friction (A6, R30), then add reusable batches (R28–R29) | Usual product requires only quantity; known cup/scoop uses verified grams; one recipe version and portion survive restart |
 | 5 | Complete photo intake (R16) and phone test (R32); choose always-on host only if wanted (R33) | Chat photos reach the archive; a short mobile meal works; laptop-off use only after an actual host is deployed |
@@ -79,6 +80,22 @@ proven in the live adapter merely because demo ranking tests pass.
 A phone draft smoke test can happen early. Hosting is not a prerequisite for
 finishing laptop logging. No additional database server, web app, queue, cloud
 account or credential service is required for this milestone.
+
+## Sequence 1 implementation evidence
+
+A1 exposes current journal-derived quantities separately from the original draft,
+including uncertain changes and history. A2 permits cleanup of verified items in
+partial operations, cancellation of pending/definitively rejected items, and
+safe reconfirmation of changes proved not applied. Timeouts remain protected.
+A3 binds immutable selection references to items/aliases and rejects ambiguous
+omission. A4 validates the diary and raw scores used in the same daily-total read.
+A9 checks approved food, measure and timezone before each pending send; legacy
+operations without snapshots require cancellation/review of unsent work.
+A10 requires the exact proposal review token before custom-food creation.
+
+Changed unsent work is handled by cancelling only those items, then reviewing a
+new draft containing only the cancelled remainder. Successful/uncertain items
+must never be copied for retry. This deliberately reuses the existing draft flow.
 
 ## Complete requirement map
 
@@ -123,7 +140,7 @@ account or credential service is required for this milestone.
 | **A11 Small discovery tools** | Bounded recent-food, own-product/local proposal and named nutrient-definition lookup | Reuse a product after restart without knowing its proposal ID. Find the correct micronutrient ID/unit without guessing. Paginate only growing results; do not silently turn recency into an exact match. |
 
 The code audit records which items have a reproduced defect versus a design gap.
-This documentation change does not claim those issues are fixed.
+Sequence 1 fixes the documented cases. See [recovery semantics](sequence-1-recovery.md) for bounded cancellation, legacy compatibility and remaining ambiguity.
 
 ## Next PR and merge rules
 
@@ -137,8 +154,7 @@ This documentation change does not claim those issues are fixed.
 4. Merge reviewed changes and update this map in the same PR. Restart the chosen
    runtime, refresh tools when schemas change, verify health and an actual tool call.
    A merged branch or installed schema alone is not a deployment.
-5. Close the superseded #8–#14 records separately after confirming their integrated
-   ancestry; do not re-merge or rebuild those features.
+5. Superseded #8–#14 are closed; do not re-merge or rebuild those features.
 
 Keep secrets, raw diary data and label photographs out of Git. Retain private
 originals regardless of publication choice. Public submission is separate from

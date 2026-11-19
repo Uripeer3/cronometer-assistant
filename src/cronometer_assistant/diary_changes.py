@@ -4,6 +4,7 @@ import re
 from dataclasses import replace
 from math import isclose
 
+from .live import MutationNotApplied
 from .models import DiaryEntry, ValidationError, number
 
 
@@ -32,7 +33,6 @@ class DiaryChanges:
         operation = self.meals.store.get("operations", meal_id)
         if (
             not operation
-            or operation["state"] != "committed"
             or type(item_index) is not int
             or not 0 <= item_index < len(operation["steps"])
         ):
@@ -113,10 +113,22 @@ class DiaryChanges:
                 return self._verify(operation, previous, entry, response, sent_now=False)
 
             found = self._read(entry)
-            if same_request and self._matches(found, entry, grams):
+            if (
+                same_request
+                and previous["state"] == "verified"
+                and self._matches(found, entry, grams)
+            ):
                 return self.meals.response(**response, state="verified", already_applied=True)
 
-            current_grams = previous["to_grams"] if previous else entry.grams
+            current_grams = (
+                (
+                    previous["from_grams"]
+                    if previous["state"] == "not_applied"
+                    else previous["to_grams"]
+                )
+                if previous
+                else entry.grams
+            )
             if current_grams is None:
                 raise ValidationError("This serving was already undone")
             if not _same_amount(current_grams, expected_grams):
@@ -128,6 +140,8 @@ class DiaryChanges:
             if grams is not None and _same_amount(current_grams, grams):
                 return self.meals.response(**response, state="verified", already_applied=True)
 
+            if previous:
+                step.setdefault("change_history", []).append(previous)
             change = {**request, "state": "sending"}
             step["diary_change"] = change
             self.meals.store.put("operations", meal_id, operation)
@@ -136,6 +150,15 @@ class DiaryChanges:
                     self.meals.diary.delete(found)
                 else:
                     self.meals.diary.edit_amount(found, grams)
+            except MutationNotApplied:
+                change["state"] = "not_applied"
+                self.meals.store.put("operations", meal_id, operation)
+                return self.meals.response(
+                    **response,
+                    state="not_applied",
+                    retry_safe=True,
+                    next_step="No change was applied. Recheck the current serving and confirm before retrying.",
+                )
             except Exception:
                 # The request may have reached Cronometer. Only readback can settle it.
                 pass

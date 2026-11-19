@@ -8,10 +8,10 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from .catalog import CronometerReadOnlyCatalog
-from .live import LiveError, account_timezone
+from .live import LiveError, account_timezone, fresh_account_timezone
 from .live_diary import LiveDiary
 from .live_diary import local_time as validated_time
-from .models import Food, ValidationError, text
+from .models import Food, ValidationError, normalized, text
 from .service import MealService
 from .store import ScopedStore
 
@@ -55,29 +55,52 @@ class ReviewedCatalog:
             if row is None:
                 raise ValidationError("Search again and choose the exact Cronometer food variant")
             selection["name"] = row.get("name") or food.name
+        snapshot = {
+            "observed": json.loads(json.dumps(food.to_dict())),
+            "preparation": preparation,
+            "per_100g_confirmed": True,
+            "selection": selection,
+        }
+        selection_id = hashlib.sha256(json.dumps(snapshot, sort_keys=True).encode()).hexdigest()
+        snapshot["selection_id"] = selection_id
         with self.store.locked():
-            self.store.put(
-                "verified_foods",
-                food_id,
-                {
-                    "observed": json.loads(json.dumps(food.to_dict())),
-                    "preparation": preparation,
-                    "per_100g_confirmed": True,
-                    "selection": selection,
-                },
-            )
-        return replace(food, preparation=preparation, **selection)
+            self.store.put("food_selections", selection_id, snapshot)
+            # A compatibility default for new items; bound items never use this pointer.
+            self.store.put("verified_foods", food_id, snapshot)
+        return replace(food, preparation=preparation, selection_id=selection_id, **selection)
 
-    def _reviewed(self, food):
-        row = self.store.get("verified_foods", food.food_id)
-        if row and row["observed"] == json.loads(json.dumps(food.to_dict())):
-            return replace(food, preparation=row["preparation"], **row.get("selection", {}))
-        # Old draft records had no translation field and describe the canonical food.
-        if row and "translation_id" not in row["observed"]:
-            observed = {**row["observed"], "translation_id": 0}
-            if observed == json.loads(json.dumps(food.to_dict())):
-                return replace(food, preparation=row["preparation"])
-        return None
+    def get_selection(self, food_id, selection_id=None):
+        if selection_id is not None:
+            selection_id = text(selection_id, "selection_id", 200)
+        if selection_id is None:
+            matches = [
+                r
+                for r in self.store.values("food_selections")
+                if r["observed"]["food_id"] == food_id
+            ]
+            if len(matches) > 1:
+                raise ValidationError(
+                    "Several verified selections exist; pass the exact selection_id"
+                )
+        row = (
+            self.store.get("food_selections", selection_id)
+            if selection_id
+            else self.store.get("verified_foods", food_id)
+        )
+        if not row or row["observed"]["food_id"] != food_id:
+            raise ValidationError("Food is unverified; review its exact selection first")
+        observed = {"translation_id": 0, "selection_id": None, **row["observed"]}
+        food = self.upstream.get(food_id)
+        if observed != json.loads(json.dumps(food.to_dict())):
+            raise ValidationError(
+                "Food is unverified or changed; review its identity and basis again"
+            )
+        return replace(
+            food,
+            preparation=row["preparation"],
+            selection_id=row.get("selection_id"),
+            **row.get("selection", {}),
+        )
 
     def search(self, query):
         foods = self.upstream.search(query)
@@ -87,18 +110,13 @@ class ReviewedCatalog:
                 "name": food.name,
                 "translation_id": food.translation_id,
             }:
-                foods[i] = replace(food, preparation=saved["preparation"])
+                foods[i] = replace(
+                    food, preparation=saved["preparation"], selection_id=saved.get("selection_id")
+                )
         return foods
 
     def get(self, food_id) -> Food:
-        if not isinstance(food_id, str) or not re.fullmatch(r"crono:[1-9][0-9]*", food_id):
-            raise ValidationError("Select an inspected Cronometer food ID")
-        food = self._reviewed(self.upstream.get(food_id))
-        if food is None:
-            raise ValidationError(
-                "Food is unverified or changed; review its identity and basis again"
-            )
-        return food
+        return self.get_selection(food_id)
 
 
 class LiveDraftService(MealService):
@@ -119,6 +137,41 @@ class LiveDraftService(MealService):
             draft_only=diary is None,
         )
         self.client = client
+        with scoped.locked():
+            for row in scoped.values("verified_foods"):
+                if not row.get("selection_id"):
+                    identity = hashlib.sha256(json.dumps(row, sort_keys=True).encode()).hexdigest()
+                    row["selection_id"] = identity
+                    scoped.put("food_selections", identity, row)
+                    scoped.put("verified_foods", row["observed"]["food_id"], row)
+            for namespace in ("meals", "aliases"):
+                for record in scoped.values(namespace):
+                    items = record.get("items", []) if namespace == "meals" else [record]
+                    changed = False
+                    for item in items:
+                        saved = scoped.get("verified_foods", item.get("food_id", ""))
+                        if saved and not item.get("selection_id"):
+                            item["selection_id"] = saved["selection_id"]
+                            changed = True
+                    if changed:
+                        key = (
+                            record["meal_id"]
+                            if namespace == "meals"
+                            else normalized(record["alias"])
+                        )
+                        scoped.put(namespace, key, record)
+
+    def _item_food(self, item):
+        return self.catalog.get_selection(item["food_id"], item.get("selection_id"))
+
+    def update_meal(self, meal_id, *, items, **kwargs):
+        bound = []
+        for item in items:
+            item = dict(item)
+            if item.get("food_id"):
+                item["selection_id"] = self._item_food(item).selection_id
+            bound.append(item)
+        return super().update_meal(meal_id, items=bound, **kwargs)
 
     def begin_meal(self, *args, **kwargs):
         # Do not silently move a running conversation to a different calendar zone.
@@ -191,18 +244,19 @@ class LiveMealService(LiveDraftService):
         return review
 
     def _plan(self, meal):
-        if account_timezone(self.client._timezone) != meal["timezone"]:
+        if fresh_account_timezone(self.client) != meal["timezone"]:
             raise ValidationError("Cronometer's timezone changed; review the date and time again")
         result = []
         for item in meal["items"]:
-            food = self.catalog.get(item["food_id"])
+            food = self._item_food(item)
             params = self.diary.prepare(item, meal, {"translation_id": food.translation_id})
             result.append(
                 {
                     "item": item,
                     "state": "pending",
                     "add_parameters": params,
-                    "food_profile": food.to_dict(),
+                    "food_profile": json.loads(json.dumps(food.to_dict())),
+                    "measure_profile": self.diary.measure_snapshot(params),
                 }
             )
         return result
@@ -231,15 +285,102 @@ class LiveMealService(LiveDraftService):
         return result
 
     def review_meal(self, meal_id):
-        return self._with_review_token(super().review_meal(meal_id))
+        with self.store.locked():
+            operation = self.store.get("operations", meal_id)
+            if operation:
+                return self.response(
+                    meal=self._meal(meal_id),
+                    original_draft_is_historical=True,
+                    current_recorded=self._current_recorded(operation),
+                    review={
+                        "ready_to_log": False,
+                        "questions": [],
+                        "note": "Original draft is historical; current recorded state is separate.",
+                    },
+                )
+            return self._with_review_token(super().review_meal(meal_id))
 
     def _planned_steps(self, meal, review_token):
         steps = self._plan(meal)
         if not review_token or review_token != self._token(meal, steps):
             raise ValidationError("The food or serving changed; present the current review again")
-        for step in steps:
-            del step["food_profile"]
         return steps
+
+    def _validate_pending_step(self, meal, step):
+        if fresh_account_timezone(self.client) != meal["timezone"]:
+            raise ValidationError("Account timezone changed")
+        food = self._item_food(step["item"])
+        params = self.diary.prepare(step["item"], meal, {"translation_id": food.translation_id})
+        profile = json.loads(json.dumps(food.to_dict()))
+        if (
+            step.get("food_profile") != profile
+            or step.get("add_parameters") != params
+            or step.get("measure_profile") != self.diary.measure_snapshot(params)
+        ):
+            raise ValidationError("Pending food or serving changed; review again")
+
+    def cancel_pending(self, meal_id, *, confirmed=False):
+        if confirmed is not True:
+            raise ValidationError("Confirm cancelling the unsent remainder first")
+        with self.store.locked():
+            meal = self._meal(meal_id)
+            operation = self.store.get("operations", meal_id)
+            if not operation:
+                raise ValidationError("No logging operation; delete an unlogged draft instead")
+            for step in operation["steps"]:
+                if step["state"] in {"pending", "not_applied"}:
+                    step["cancelled_from"] = step["state"]
+                    step["state"] = "cancelled"
+            terminal = all(s["state"] in {"verified", "cancelled"} for s in operation["steps"])
+            self._persist_operation(
+                meal,
+                operation,
+                self._completed_state(operation) if terminal else "needs_reconciliation",
+            )
+            return self.response(
+                operation=self._visible_operation(operation),
+                current_recorded=self._current_recorded(operation),
+                next_step="Unsent items are cancelled. Uncertain attempts remain protected; only cancelled items may be reviewed in a new draft.",
+            )
+
+    @staticmethod
+    def _current_recorded(operation):
+        rows = []
+        for index, step in enumerate(operation["steps"]):
+            change = step.get("diary_change")
+            grams = step.get("add_parameters", {}).get("grams", step["item"].get("grams"))
+            state = step["state"]
+            last_verified = grams if state == "verified" else None
+            if change:
+                if change["state"] == "verified":
+                    grams = change["to_grams"]
+                    last_verified = grams
+                    state = "undone" if grams is None else "verified"
+                elif change["state"] == "not_applied":
+                    grams = last_verified = change["from_grams"]
+                else:
+                    last_verified = change["from_grams"]
+                    state, grams = "change_uncertain", None
+            elif state != "verified":
+                grams = None
+            rows.append(
+                {
+                    "item_index": index,
+                    "food_id": step["item"]["food_id"],
+                    "food_name": step.get("food_profile", {}).get(
+                        "name", step["item"]["description"]
+                    ),
+                    "entry_id": step.get("entry_id"),
+                    "state": state,
+                    "grams": grams,
+                    "last_verified_grams": last_verified,
+                    "requested_grams": change["to_grams"] if change else None,
+                }
+            )
+        return {
+            "source": "assistant journal; use logging status for fresh diary readback",
+            "items": rows,
+        }
 
     def _matches_step(self, entry, step, meal):
         params = step["add_parameters"]
@@ -264,6 +405,7 @@ class LiveMealService(LiveDraftService):
             else (True if operation["state"] == "committed" else None)
         )
         result["operation"] = self._visible_operation(operation)
+        result["current_recorded"] = self._current_recorded(operation)
         return result
 
     @staticmethod
@@ -311,4 +453,6 @@ class LiveMealService(LiveDraftService):
                 operation=self._visible_operation(operation),
                 diary=[entry.to_dict() for entry in entries if entry.entry_id in own_ids],
                 reconciliation_candidates=candidates,
+                original_draft_is_historical=True,
+                current_recorded=self._current_recorded(operation),
             )

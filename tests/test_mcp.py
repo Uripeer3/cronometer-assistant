@@ -198,6 +198,7 @@ class MCPTests(unittest.TestCase):
                 {
                     "proposal_id": pid,
                     "reviewed": False,
+                    "review_token": data["review_token"],
                 },
             )
             self.assertFalse(payload(blocked)["ok"])
@@ -207,6 +208,7 @@ class MCPTests(unittest.TestCase):
                 {
                     "proposal_id": pid,
                     "reviewed": True,
+                    "review_token": data["review_token"],
                 },
             )
             self.assertTrue(payload(created)["created"])
@@ -251,7 +253,7 @@ class MCPTests(unittest.TestCase):
                 carbohydrate_basis="excludes_fiber",
                 category_id=0,
             )["product"]["proposal_id"]
-            service.create(pid, True)
+            service.create(pid, True, service.review(pid)["review_token"])
             server = create_read_only_server(ReadOnlyConnection(client), product_service=service)
 
             def payload(result):

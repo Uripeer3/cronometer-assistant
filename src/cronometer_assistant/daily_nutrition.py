@@ -36,7 +36,30 @@ def daily_nutrition(client, day: str | None = None) -> dict:
         selected_day = datetime.now(ZoneInfo(timezone)).date()
 
     try:
-        result = client.get_consumed_nutrients(selected_day, include_untracked=False)
+        scores = client.get_nutrition_scores(selected_day)
+        if not isinstance(scores, dict) or not isinstance(scores.get("scores"), list):
+            raise ValueError
+        if any(not isinstance(row, dict) for row in scores["scores"]):
+            raise ValueError
+        targets = [row for row in scores["scores"] if row.get("title") == "All Targets"]
+        if len(targets) != 1 or not isinstance(targets[0].get("components"), list):
+            raise ValueError
+        definitions = client.get_nutrient_definitions()
+        result = {"nutrients": []}
+        for component in targets[0]["components"]:
+            if not isinstance(component, dict) or type(component.get("nutrientId")) is not int:
+                raise ValueError
+            meta = definitions.get(component["nutrientId"], {})
+            result["nutrients"].append(
+                {
+                    "id": component["nutrientId"],
+                    "name": meta.get("name"),
+                    "unit": meta.get("unit"),
+                    "amount": component.get("amount"),
+                    "confidence": component.get("confidence"),
+                    "tracked": True,
+                }
+            )
     except LoginRequired:
         raise
     except Exception:

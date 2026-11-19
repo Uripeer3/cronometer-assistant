@@ -45,7 +45,10 @@ class ProductService:
         public = (
             {}
             if product is None
-            else {"product": {k: v for k, v in product.items() if k != "payload"}}
+            else {
+                "product": {k: v for k, v in product.items() if k != "payload"},
+                "review_token": ProductService.review_token(product),
+            }
         )
         return {"mode": "cronometer_products", "real_diary_changed": False, **public, **data}
 
@@ -279,11 +282,30 @@ class ProductService:
             remote_food_changed=remote_food_changed,
         )
 
-    def create(self, proposal_id: str, reviewed: bool):
+    @staticmethod
+    def review_token(product):
+        snapshot = {
+            key: product.get(key)
+            for key in (
+                "proposal_id",
+                "label",
+                "serving_grams",
+                "category_id",
+                "label_type",
+                "barcode",
+            )
+        }
+        return hashlib.sha256(json.dumps(snapshot, sort_keys=True).encode()).hexdigest()
+
+    def create(self, proposal_id: str, reviewed: bool, review_token: str | None = None):
         if reviewed is not True:
             raise ValidationError("Review the prepared product before creating it in Cronometer")
         with self.store.locked():
             product = self._product(proposal_id)
+            if review_token != self.review_token(product):
+                raise ValidationError(
+                    "Product changed or approval is missing; review the current proposal token"
+                )
             self._check_unresolved(product)
             if product["state"] == "created":
                 # Also recheck legacy records: a positive Atomic value is not a

@@ -74,6 +74,7 @@ class Food:
     aliases: tuple[str, ...] = ()
     synthetic: bool = False
     translation_id: int = 0
+    selection_id: str | None = None
 
     def __post_init__(self):
         text(self.food_id, "food_id", 200)
@@ -106,11 +107,14 @@ class MealItem:
     preparation: str = "unspecified"
     quantity_basis: str = "weighed"
     assumption: str | None = None
+    selection_id: str | None = None
 
     def __post_init__(self):
         text(self.description, "description")
         if self.food_id is not None:
             text(self.food_id, "food_id", 200)
+        if self.selection_id is not None:
+            text(self.selection_id, "selection_id", 200)
         if self.grams is not None:
             number(self.grams, "grams", positive=True)
         if self.preparation not in {"raw", "cooked", "as_sold", "unspecified"}:

@@ -27,7 +27,7 @@ class RepairTests(unittest.TestCase):
             carbohydrate_basis="excludes_fiber",
             category_id=0,
         )["product"]["proposal_id"]
-        self.service.create(self.pid, True)
+        self.service.create(self.pid, True, self.service.review(self.pid)["review_token"])
         self.repairs = ProductRepairs(self.service)
 
     def test_adopts_same_food_without_recreation_and_later_barcode_reuses_identity(self):
@@ -52,7 +52,11 @@ class RepairTests(unittest.TestCase):
             barcode="4006381333931",
         )
         self.assertEqual(reused["product"]["proposal_id"], self.pid)
-        self.assertTrue(self.service.create(self.pid, True)["created"])
+        self.assertTrue(
+            self.service.create(self.pid, True, self.service.review(self.pid)["review_token"])[
+                "created"
+            ]
+        )
         self.assertTrue(self.repairs.adopt(review["repair_id"], True)["already_adopted"])
         self.assertEqual(self.client.adds, 1)
 

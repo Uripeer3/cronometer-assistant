@@ -65,7 +65,7 @@ def register_draft_tools(server, service, call):
         meal_group: str | None = None,
         local_time: str | None = None,
     ) -> dict:
-        """Replace the full LOCAL draft, preserving unanswered questions and estimate assumptions."""
+        """Replace the full LOCAL draft. Preserve selection_id from verify_food_for_draft on each item, unanswered questions and estimate assumptions."""
         return call(
             service.update_meal,
             meal_id,
@@ -94,6 +94,6 @@ def register_draft_tools(server, service, call):
         return call(service.delete_draft, meal_id, expected_revision)
 
     @server.tool(annotations={"readOnlyHint": False, "destructiveHint": False})
-    def remember_product(alias: str, food_id: str) -> dict:
+    def remember_product(alias: str, food_id: str, selection_id: str | None = None) -> dict:
         """Remember a verified usual product only after the user establishes that preference."""
-        return call(service.remember_product, alias, food_id)
+        return call(service.remember_product, alias, food_id, selection_id)

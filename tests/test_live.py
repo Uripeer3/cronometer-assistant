@@ -239,7 +239,7 @@ class PinnedClientTests(unittest.TestCase):
         pid = service.prepare(
             "Synthetic food", 100, "g", {"energy": {"amount": 200, "unit": "kcal"}}, category_id=0
         )["product"]["proposal_id"]
-        result = service.create(pid, True)
+        result = service.create(pid, True, service.review(pid)["review_token"])
         self.assertTrue(result["created"])
         self.assertNotIn("fake-token", json.dumps(service.store.get("product_proposals", pid)))
         self.assertNotIn("fake-token", json.dumps(result))
