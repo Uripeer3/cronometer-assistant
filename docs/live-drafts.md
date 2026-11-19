@@ -29,10 +29,12 @@ The review reports known nutrient subtotals and missing coverage. `draft_complet
 means questions and consumption intent are resolved; `ready_to_log` remains false
 and `logging_supported` false. Never describe this as logged in Cronometer.
 Food basis confirmation and existing source mappings are explicit pilot gates.
-Brand metadata is not inferred from free text; if a brand filter returns no
-candidate, search the exact product name and inspect it instead.
+The live ranker can use a whole brand phrase in a food name when a separate brand
+field is missing; this is a search aid, not proof of exact product identity. If a
+brand filter returns no candidate, search the exact product name and inspect it.
 
 Morning test: use one confirmed generic food and the private cereal, switch
 Hebrew/English, resolve preparation/quantity, record an accepted estimate, restart
 and resume. Compare a weighed portion against the app without logging it. Check
-the reported timezone before the future scoped diary-write test.
+the reported timezone before the scoped diary-write test in `meals` mode. That
+mode adds real writes; this guide describes draft/product mode boundaries.

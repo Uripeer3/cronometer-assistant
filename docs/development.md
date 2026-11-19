@@ -11,7 +11,12 @@
 | `service.py` | Draft revisions, product memory, review, commit journal and reconciliation |
 | `backend.py` | Diary boundary and the simulated implementation |
 | `live.py` / `read_only_server.py` | Hidden local sign-in, private session, allowlisted HTTP, separate food-inspection MCP tools |
-| `server.py` | Standard SDK tools and assistant instructions; local stdio |
+| `server.py` | Demo SDK tools and assistant instructions; local stdio |
+| `live_drafts.py` / `draft_tools.py` | Verified profiles, account-bound drafts and live write planning |
+| `live_diary.py` / `meal_tools.py` | Exact serving adapter and live meal tool registration |
+| `diary_changes.py` / `daily_nutrition.py` | Amount correction, item undo and tracked daily totals |
+| `products.py` / `repairs.py` / `submission.py` | New private foods, manual repair adoption and local submission-choice journal |
+| `evidence.py` / `backups.py` | Private image archive and isolated backup/restore |
 
 The application is a single process, single user, and one writable SQLite database per instance. Use a local filesystem on one host; cross-host/network-filesystem locking and multi-user tenancy are not implemented. SQLite uses durable commits and a versioned schema. Its `fcntl` operation lock targets Linux/macOS.
 
@@ -38,9 +43,9 @@ The MCP round-trip test skips when the SDK is absent locally. CI sets `REQUIRE_M
 
 A meal ID identifies a single consumption event. Draft revisions prevent stale updates and commits. The journal is durable before each side effect, records returned entry IDs, and verifies the result by reading the diary. A second request for the same meal reuses its operation. An additional identical meal needs its own draft.
 
-If an add times out, the write may have succeeded. The service does not guess from an identical food/weight alone and does not retry the addition. `reconcile_demo_entry` explicitly associates the attempt with a new matching diary entry. Once that is verified, the same operation can continue. A read-back failure with an already recorded remote ID can be retried without adding again.
+If an add times out, the write may have succeeded. The service does not guess from an identical food/weight alone and does not retry the addition. `reconcile_demo_entry` (demo) or `reconcile_logged_serving` (meals) explicitly associates the attempt with a new matching diary entry. Once that is verified, the same operation can continue. A read-back failure with an already recorded remote ID can be retried without adding again.
 
-The simulated backend deliberately has no upstream idempotency key. This exercises the actual uncertainty we expect from the private Cronometer API. Partial multi-food writes are retained in the journal; no transactional or exactly-once guarantee is asserted. Committed drafts are immutable in this release. Corrections, undo, and explicitly releasing an attempt proven not to have written anything are next-milestone features; never work around uncertainty by blindly creating another meal.
+The simulated backend deliberately has no upstream idempotency key. This exercises the actual uncertainty we expect from the private Cronometer API. Partial multi-food writes are retained in the journal; no transactional or exactly-once guarantee is asserted. Committed draft intent is immutable; meals mode separately supports amount correction and item undo. Current summaries and partial-operation editing have unresolved gaps described in the [audit](code-review-2026-11-19.md). Explicitly resolving an attempt proven not sent is still pending; never work around uncertainty by blindly creating another meal.
 
 Only assistant-flagged or structurally known ambiguities are enforced by the backend. It does not infer missing oil or dressings from unrestricted speech. The host's dialogue/vision model supplies that interpretation; its pending questions remain in the draft until explicitly cleared.
 
@@ -56,15 +61,16 @@ The committed `uv.lock` was resolved in GitHub Actions because the initial local
 
 Runtime files are ignored by Git. The service creates its database with mode 0600 and new data directories with mode 0700. That does not replace disk encryption, authenticated remote access, or backup policy. Do not log raw tool requests, label photos, credentials, or sessions.
 
-No production deployment, public MCP endpoint, scheduled task, real-account credential, or live Cronometer write is configured. Before deployment, add authentication, session expiry handling, database backup/restore checks, and a tested rollback path. Store runtime data on a persistent volume; deploy immutable tested revisions. The repository intentionally contains no environment secrets.
+The local pilot uses the authenticated outbound tunnel and private session files outside Git. Meals mode permits scoped live diary writes; product mode permits new private-food creation. No always-on deployment or automatic restart is established by this repository. Backup/restore commands exist, but supervision, an actual restore drill and a tested rollback path remain pending. Store runtime data on persistent local disk; the repository contains no environment secrets.
 
 ## Read-only account compatibility
 
 See [setup](cronometer-read-only.md). CI installs the pinned live extra and sets
 `REQUIRE_LIVE_TESTS=1`; real-client tests mock HTTP and use synthetic credentials.
 No real-account tests or secrets run in CI. Read-only mode has a separate tool
-surface and HTTP allowlist. The existing meal service still refuses real diary
-backends. Source-code mappings and food/measure fidelity remain unverified.
+surface and HTTP allowlist. Draft mode refuses diary writes; meals mode uses the live adapter. Source-code
+mappings and broad food/measure fidelity remain unverified. The current full suite
+has 125 tests; live write acceptance and review findings remain separate gates.
 
 Demo draft deletion is revision-checked and blocks any meal with a journal entry,
 including uncertain writes. It removes only the local draft, never diary entries.
@@ -78,3 +84,12 @@ sends a deep copy and excludes internal payloads from tool results. HTTP creatio
 is an explicit capability; ordinary read-only clients still reject add_food.
 Tests cover synthetic timeout/crash recovery, token non-persistence, read-back,
 account separation and the real pinned request helper with mocked HTTP.
+
+## Current review and roadmap
+
+The [19 November review](code-review-2026-11-19.md) records reproduced defects and
+missing end-to-end cases. The [upstream matrix](upstream-comparison.md) inventories
+the optional client's tool surface without promising feature parity. Update the
+[current roadmap](pr-map.md) in each implementation PR, with synthetic and live
+evidence distinguished. Historical planning slots are R-prefixed requirements,
+not reserved GitHub PR numbers.

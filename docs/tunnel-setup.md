@@ -1,5 +1,9 @@
 # Connect the demo through Secure MCP Tunnel
 
+For everyday meal logging and automatic startup on Fedora/GNOME, use the
+[end-to-end setup and operations guide](setup-and-operations.md). This page covers
+the temporary foreground launcher; stop the systemd service before reusing its tunnel.
+
 The demo runs on your laptop. It needs an outbound connection to OpenAI and must stay running for ChatGPT to discover and use its tools. It does not access your real Cronometer diary.
 
 ## One-time Platform setup
@@ -72,7 +76,7 @@ key, stop the launcher, remove only `.runtime/tunnel-api-key`, and run again wit
 
 ## Evidence inbox and download reliability (feature stack)
 
-After the evidence PRs are merged, product mode can forward an explicit private
+Product mode can forward an explicit private
 inbox: `--mode products --evidence-inbox /absolute/private/inbox`. The host must
 place selected image attachments there first; this flag does not transfer chat
 attachments automatically. The server validates directory permissions and accepts

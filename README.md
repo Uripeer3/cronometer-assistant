@@ -4,6 +4,8 @@ A private prototype for logging meals through an existing AI assistant. The assi
 
 ## Log meals in ChatGPT
 
+**Start here:** [End-to-end setup, automatic startup, updates and recovery](docs/setup-and-operations.md). It covers the local service, private key, tunnel, ChatGPT connection and everyday restart commands. Already set up? Jump to its everyday commands or update procedure.
+
 Use the **meals** server mode for a personal Cronometer diary. The server runs on your computer and ChatGPT reaches it through the existing private MCP tunnel. On a new installation, install the locked dependencies and sign in to Cronometer once from a terminal in the repository.
 
 ```bash
@@ -22,6 +24,8 @@ Keep the launcher running. Once the tunnel is ready, refresh the connection in C
 To log a meal, describe what you ate in Hebrew or English. For example, **“For lunch at 13:00 I ate 150 g of cooked white rice.”** The assistant finds the food, verifies its preparation and nutrient basis, and shows the selected food, grams, date, account-local time and meal group. Once you confirm that review, `log_meal` sends each weighed serving and verifies the returned entry in the diary. The journal prevents a repeated request from adding a second serving. An uncertain response can be checked with `get_logging_status`.
 
 To change an assistant-logged serving, say **“Change that rice from 150 g to 120 g”** or **“Undo the rice.”** The assistant identifies the particular serving, asks for confirmation, then verifies the result. The tools are `correct_logged_amount` and `undo_logged_item`. A meal can contain several servings.
+
+The [current roadmap](docs/pr-map.md) and [independent code review](docs/code-review-2026-11-19.md) separate implemented features from acceptance and unresolved issues. The meal pilot is not yet declared ready for unattended everyday use.
 
 The installed ChatGPT connection has been tested with live food reads and daily totals. Automated tests exercise add, correct, undo and uncertain responses using the pinned Cronometer client and simulated HTTP. The final live write check is a real meal you choose to log, followed by a check of its date, amount and meal group in Cronometer.
 
@@ -53,7 +57,7 @@ To test it in ChatGPT through an OpenAI private tunnel, use the [tunnel setup gu
 
 - Persistent drafts with revisions, consumption intent, and unresolved questions.
 - Revision-checked deletion of unlogged drafts; logged/uncertain meals are protected.
-- Source-aware food ranking: identity/preparation first, then database preference.
+- Source-aware ranking policy: identity/preparation first, then database preference. Live source mappings remain unverified; demo policy tests do not establish live database prioritization.
 - Verified product aliases, including Hebrew names, persisted across restarts.
 - Validation of structured label data, including serving basis, kJ/kcal, mass units, salt equivalent, and explicit density for ml-to-g conversion. The assistant reads the image; the backend validates extracted values.
 - Nutrient subtotals with missing-data coverage; absent values never become zero.
@@ -102,4 +106,4 @@ See the [development PR map](docs/pr-map.md) for the next review and test sequen
 
 ## Pilot guides
 
-The merged pilot includes [private product evidence](docs/product-evidence.md), [manual food repair reconciliation](docs/product-repairs.md), [local drafts using real foods](docs/live-drafts.md) and [backup/restore](docs/backups.md). The [PR map](docs/pr-map.md) records the wider backlog.
+The merged pilot includes [private product evidence](docs/product-evidence.md), [manual food repair reconciliation](docs/product-repairs.md), [local drafts using real foods](docs/live-drafts.md) and [backup/restore](docs/backups.md). The [PR map](docs/pr-map.md) records current status, priorities and acceptance tests; the [upstream comparison](docs/upstream-comparison.md) inventories the original connector and our intentional omissions.
