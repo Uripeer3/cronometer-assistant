@@ -68,16 +68,20 @@ include fiber: at 42 g, label carbs are 13.02 g, fiber 4.62 g and polyols 4.2 g;
 canonical carbs are 17.64 g and net carbs are 8.82 g. Package rounding explains
 the displayed label values 13 g and 8.8 g. No extra carbohydrate was invented.
 
-## Still to accept locally
+## Deployment follow-up and remaining acceptance
 
-The existing systemd tunnel answered a connection check. This environment could
-not write the relocated installation or access the systemd user bus, so that
-service was not updated/restarted. The live pilot tested new source directly,
-not the new combined surface through the deployed ChatGPT connection.
+During the pilot this environment could not update the relocated installation
+or access the systemd user bus. The live drill therefore tested new source
+directly, not through the deployed ChatGPT connection.
 
-Follow [update/restart instructions](setup-and-operations.md#update-the-code),
-refresh the ChatGPT connection and start a new chat. Confirm that product tools
-and `log_meal` are both available. Then try an ordinary dinner and, when needed,
+After PR #19 merged, the user completed the local update/restart. On 20 November
+the checkout was verified clean on main at merge 6b0c118, both runtime backups
+passed verification, a live MCP read succeeded, and discovery exposed both
+product creation and meal logging. The initial backup failure was a parent
+directory with mode 0755; changing it to 0700 resolved that prerequisite.
+
+For future updates use the [update/restart instructions](setup-and-operations.md#update-the-code).
+The next acceptance is an ordinary dinner in a new chat and, when needed,
 create an exact missing package from its label in the same conversation.
 
 A general diary-day view, renamed/custom groups, multi-item live acceptance,
