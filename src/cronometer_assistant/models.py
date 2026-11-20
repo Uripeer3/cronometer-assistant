@@ -130,6 +130,30 @@ class MealItem:
         return asdict(self)
 
 
+def parse_meal_items(items: object) -> list[MealItem]:
+    """Validate the entire replacement before resolving foods or changing a draft."""
+    if not isinstance(items, list) or len(items) > 100:
+        raise ValidationError("items must be a complete list of at most 100 foods")
+    fields = tuple(MealItem.__dataclass_fields__)
+    hint = "Allowed fields: " + ", ".join(fields) + ". Use meal.items, not review.entries."
+    parsed = []
+    for index, row in enumerate(items):
+        prefix = f"items[{index}]"
+        if not isinstance(row, dict):
+            raise ValidationError(f"{prefix} must be an object. {hint}")
+        if "description" not in row or any(key not in fields for key in row):
+            raise ValidationError(
+                f"{prefix} requires description and accepts no extra fields. {hint}"
+            )
+        try:
+            parsed.append(MealItem(**row))
+        except ValidationError as error:
+            raise ValidationError(f"{prefix}: {error}") from error
+        except TypeError as error:
+            raise ValidationError(f"{prefix} has an invalid field type. {hint}") from error
+    return parsed
+
+
 @dataclass(frozen=True)
 class DiaryEntry:
     entry_id: str

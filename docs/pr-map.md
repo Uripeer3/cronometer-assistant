@@ -7,6 +7,12 @@ findings and sequence 2 (#19) combined the tools and passed the scoped live pilo
 The relocated checkout is now clean on this main revision. A live MCP connection
 check succeeds, and refreshed discovery exposes product creation, meal logging
 and unsent-item cancellation together. Both runtime backups verify successfully.
+The first conversational pilot exposed a draft-input schema gap: the tool
+advertised generic objects while the service accepted seven specific fields.
+The follow-up fix exposes those fields in live/demo MCP schemas and validates
+malformed replacements before food lookup or draft mutation. Deployment and
+the user's conversational retry remain pending; the earlier live pilot did not
+exercise this failure. See [draft input and selected-food logging](meal-draft-input.md).
 This is one person's meal-logging utility: one Python service, SQLite, private
 files and the existing MCP tunnel. Complete the everyday flow before adding more
 interfaces. Android hosting is deferred at the user's request.
@@ -75,6 +81,14 @@ source mappings are not configured. Do not claim NCCDB/USDA prioritization is
 proven in the live adapter merely because demo ranking tests pass.
 
 ## Delivery order: a small usable milestone first
+
+Immediate acceptance: after deploying the draft-schema fix and refreshing tools,
+resume a historical draft, save five verified foods and keep an unresolved food
+in a separate draft. Verify the date/time, review and log only the ready draft,
+then read back its status. Synthetic SDK tests cover this path without account
+writes. There is no atomic subset/split tool yet; keep that as a small R30
+follow-up if separate-draft handling is too fragile. Do not mark the ordinary
+conversational meal pilot complete until the actual retry succeeds.
 
 | Sequence | Proposed PR scope | Completion check |
 |---|---|---|
