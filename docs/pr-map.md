@@ -1,8 +1,10 @@
 # Current roadmap and acceptance tests
 
-Updated 19 November 2026. Audited baseline: `main` at
+Updated 20 November 2026. Audited baseline: `main` at
 `e57a534b95f52d121589107e1aa30e81015a081c` (merged PR #16).
-Sequence 1 implements the audit corrections below; live pilot acceptance is tracked separately.
+Sequence 1 was merged as PR #18. Sequence 2 changes and its scoped live acceptance
+are recorded below and in [the pilot report](sequence-2-pilot.md). Deployment of
+the combined tool surface requires updating/restarting the local installation.
 This is one person's meal-logging utility: one Python service, SQLite, private
 files and the existing MCP tunnel. Complete the everyday flow before adding more
 interfaces. Android hosting is deferred at the user's request.
@@ -19,7 +21,8 @@ retains design requirements; the [code audit](code-review-2026-11-19.md) and
 - **Pending:** no end-to-end implementation exists.
 - **Deferred:** retained as a possible improvement, not a prerequisite for daily use.
 - **Live evidence:** observed during earlier account/plugin tests, separately from
-  synthetic tests. This audit performs no diary writes or public submissions.
+  synthetic tests. The original audit performed no writes. Sequence 2 performed one explicitly scoped
+  add/correct/undo drill; its test entry was removed. No public submission occurred.
 
 Backlog IDs **R15–R35** preserve the old planned slots. They are requirements,
 **not GitHub PR numbers**. Actual PR #15 integrated the foundation and actual
@@ -51,13 +54,13 @@ whatever number GitHub assigns; do not reserve a long chain of branches.
 | `read-only` | Connection check, real food search/details | Drafts, products, diary reads/writes |
 | `drafts` | Real lookup, verified food profiles, persistent drafts, aliases, unlogged draft deletion | Log consumption or create foods |
 | `products` | Draft tools plus private food proposals/creation, evidence import/review, submission choices and manual repair adoption | Log diary servings, edit/delete foods remotely, upload native photos or submit to CRDB |
-| `meals` | Real lookup/drafts, full-day tracked nutrient totals, reviewed serving adds, uncertain-add reconciliation, amount correction and item undo | Product creation/archive tools, native recipes, general diary editing, automatic targets/trends |
+| `meals` | Real lookup/drafts, reviewed private-food creation and evidence tools, full-day tracked nutrient totals, reviewed serving adds, uncertain-add reconciliation, amount correction and item undo | Native recipes, general diary editing, native photo upload/public submission, automatic targets/trends |
 
-`products` defaults to `data/products.sqlite`; `drafts` and `meals` default to
-`data/drafts.sqlite`. Those are **separate stores**, not synchronized product
-memory. Shared document namespaces are already possible within one database,
-but a unified supported mode and migration are not implemented. Back up each
-active database. Changing a tunnel mode requires a server restart and tool refresh;
+`products` defaults to `data/products.sqlite`; `drafts` and `meals` keep drafts
+in `data/drafts.sqlite`. Meals mode now also opens the sibling `products.sqlite`
+(or explicit `--products-db`) for product proposals/evidence. This is one tool
+surface with **two preserved stores**: no automatic migration, alias merging or
+data loss. Back up both active databases. Changing a tunnel mode requires a server restart and tool refresh;
 a schema refresh alone does not change the running Python code.
 
 Food inspection includes measures and raw nutrient rows. Live drafts/logging take
@@ -71,7 +74,7 @@ proven in the live adapter merely because demo ranking tests pass.
 | Sequence | Proposed PR scope | Completion check |
 |---|---|---|
 | 1 | Implemented: audit correctness/recovery findings (A1–A4, A9–A10), using the existing journal and adapters | 137 synthetic tests pass, including focused audit regressions and pinned-client HTTP cases. Two independent reviews (internal and upstream comparison); live acceptance remains sequence 2. |
-| 2 | Finish the ordinary-meal pilot (R15, R23–R27, R35); bring forward the custom-food-in-meal flow from A5 after the reported chocolate limitation | One scoped live meal: inspect date/time/group/grams and non-empty daily totals, repeat without duplication, correct and undo only its entries |
+| 2 | Combined custom-food/meal surface implemented; scoped ordinary-meal pilot passed (R15, R24, own-entry portions of R26–R27, R35) | 139 automated tests; live ProFlex 42 g → 50 g → undo, app/API totals comparison and repeat dedup passed. Combined surface deployment/ChatGPT discovery remains an operator step. R23 general day view/custom groups remains pending. |
 | 3 | One everyday mode and reliable local start/update (A5, R31, R34) | Product creation and meal logging work in one conversation; restart retains all state; refreshed tools match the running revision |
 | 4 | Reduce meal-entry friction (A6, R30), then add reusable batches (R28–R29) | Usual product requires only quantity; known cup/scoop uses verified grams; one recipe version and portion survive restart |
 | 5 | Complete photo intake (R16) and phone test (R32); choose always-on host only if wanted (R33) | Chat photos reach the archive; a short mobile meal works; laptop-off use only after an actual host is deployed |
@@ -110,10 +113,10 @@ must never be copied for retry. This deliberately reuses the existing draft flow
 | **R21 Remote private-food editing** | Pending; manual repair snapshot/adoption exists | Correct category/serving on the same food ID with fresh comparison, retained measure IDs and read-back. An external edit blocks stale writes; formulation change preserves history using a new version. |
 | **R22 Food retirement/deletion** | Pending | Check supported retirement/delete and diary/recipe references. Retire a disposable owned food without damaging earlier nutrition, unrelated foods, aliases or evidence. |
 | **R23 Diary entries/groups/time** | Partial internal diary reader and own-entry status; standard groups hardcoded | Add a small read-only day view and discover/validate account groups. Compare manual + assistant entries, custom/renamed groups and midnight dates. Empty day differs from read failure. Preserve reported time and account timezone; do not assume Jerusalem and Damascus always share an offset. |
-| **R24 Reviewed live logging** | Implemented for regular non-recipe foods; live acceptance pending | Confirm exact foods/grams/date/time/group and current review token; add then inspect in app. Preparing writes nothing; repeated same event adds nothing; a separate identical meal is allowed. |
+| **R24 Reviewed live logging** | Implemented; one scoped real add/repeat/app readback passed on 20 November | Confirm exact foods/grams/date/time/group and current review token; add then inspect in app. Preparing writes nothing; repeated same event adds nothing; a separate identical meal is allowed. |
 | **R25 Partial/crash recovery** | Partial: durable per-serving add state, baseline IDs, read-back and explicit reconciliation | Test interruptions before/after every add, including a response lost after success. No blind retry or claiming a pre-existing identical entry. Revalidate still-pending plans before resume (A9), allow partial cleanup, and add a supported resolution for attempts conclusively not sent and correction/undo ambiguity (A2). |
-| **R26 Logged-meal correction** | Partial: amount of one assistant-owned serving only | Live amount check; then date/group/food replacement if useful. Distinguish additional portion from revised total. Preserve stable identity; stop on app-side conflicts. Audit corrected status/review consistency (A1). |
-| **R27 Undo/deletion** | Partial: exact assistant-owned item undo; no whole-meal tool | Live item undo and repeated undo; then multi-item undo with partial recovery. Leave manually logged identical foods untouched. Draft deletion already exists and is separate from diary/custom-food deletion. |
+| **R26 Logged-meal correction** | Partial: amount of one assistant-owned serving; live 42 g → 50 g and app readback passed | Date/group/food replacement remains pending if useful. Distinguish additional portion from revised total. Preserve stable identity; stop on app-side conflicts. Audit corrected status/review consistency (A1). |
+| **R27 Undo/deletion** | Partial: exact assistant-owned item undo; live undo/repeat and cleanup passed; no whole-meal tool | Multi-item undo with partial recovery remains pending. Leave manually logged identical foods untouched. Draft deletion already exists and is separate from diary/custom-food deletion. |
 | **R28 Saved recipe versions** | Pending; no native recipe integration | Save ingredients/IDs/amounts/preparation and immutable versions. Editing oil creates version 2 without changing version 1 or old meals. Choose local ingredient portions before native synchronization unless native history behavior is verified. |
 | **R29 Batch yield/portions** | Partial pure arithmetic helper only | Persist finished weight or explicit fraction/servings, handle unknown yield honestly. A homogeneous 1,000 g/2,000 kcal batch yields 500 kcal for 250 g. Cooking is not consumption; do not equate raw and finished weight. |
 | **R30 Follow-ups and usual products** | Partial: bilingual host instructions, questions, estimates, aliases | Reuse exact product/translation and ask only quantity. Ask dry/cooked and meaningful oils; request a crop for unreadable critical text. Add measured household units and one-off vs saved-default corrections (A6); avoid repeated basis certification. |
@@ -121,7 +124,7 @@ must never be copied for retry. This deliberately reuses the existing draft flow
 | **R32 Mobile voice** | Early bilingual draft experience exercised; complete live flow pending | On the actual phone: speak a meal, answer follow-up, send label, resume interruption and confirm once. Record taps/questions/time. A text-tool success is not proof of voice access. |
 | **R33 Always-on hosting** | Pending; current architecture requires awake connected host | Keep tunnel + SQLite/files on one chosen persistent Linux device/VM. Reboot and call while laptop sleeps. Android work deferred; no account purchase/deployment implied. Dropping photos does not make Pages a Python host. |
 | **R34 Operations/recovery** | Partial: protected session/key files, bounded launcher downloads, backup/isolated restore | Reliable supervision/autostart, tested update/rollback, session expiry, database-version migration and private readable diagnostics. Restore actual selected state without replaying uncertain writes. Password-file re-login optional, unimplemented. |
-| **R35 Personal-use acceptance** | Partial: automated suite, live reads/drafts; real diary write pilot pending | First core milestone: generic + exact product, repeated log, correction, undo, positive daily totals and restart. Later extend to photos, recipe and voice when implemented; optional public submission is not a gate to daily logging. |
+| **R35 Personal-use acceptance** | Partial: 139 automated tests and scoped exact-product live pilot passed | Combined deployment/tool refresh and a normal conversational dinner remain; generic + exact multi-item live meal and systemd restart acceptance still pending. Later extend to photos, recipe and voice when implemented; optional public submission is not a gate to daily logging. |
 
 ## Additional review-driven work
 
@@ -131,7 +134,7 @@ must never be copied for retry. This deliberately reuses the existing draft flow
 | **A2 Recovery that can reach a resolved state** | Handle definitely-not-sent attempts, partial-meal cleanup and unresolved edits/deletes without permanent dead ends | Exercise pre-send failure, post-send timeout and external changes separately. Allow undo of a verified item in a partial operation and cancel unsent remainder without recreating it. Resolve using evidence; never reset blindly or resend an ambiguous mutation. |
 | **A3 Exact selection identity** | Preserve food + translation + preparation per item/alias, not only a shared food ID | Verify two search variants sharing one food ID, use both in separate drafts, remember one and reverify the other: neither draft nor alias silently switches. |
 | **A4 Daily nutrient provenance** | Audit raw totals vs client-normalized defaults and missingness | Feed absent/null/explicit-zero nutrient totals through the actual pinned client, not only a mocked helper. Missing must remain unknown; malformed raw score envelopes must fail instead of returning a successful empty summary. Compare positive live totals with the app. |
-| **A5 One everyday mode/store** | Combine products and meals in one supported surface; consolidate existing SQLite state deliberately | Create/reuse a private product, retain photos, log it and read totals without switching modes. Migrate a copy first and preserve account bindings, IDs, journals and aliases; retain backup/rollback. |
+| **A5 One everyday mode/store** | Combined meals/product surface implemented in sequence 2; two existing stores retained deliberately | Exercise creation → verification → log in one connection and after restart. Back up both stores. Consolidation is deferred; no migration is needed for this personal-use milestone. Chat attachment delivery remains R16. |
 | **A6 Verified household quantities** | Backend conversion for exact food measures, with explicit assumptions for estimates | A cup/scoop count uses that entry's verified gram weight; custom serving 42 g and 50 g log consistently. Liquids require density when converting volume to mass. Never treat an arbitrary Atomic unit as grams. |
 | **A7 Small useful nutrition summary** | Optional read-only existing targets/remaining and short date-range totals, if useful | Amount vs target vs unknown remain distinct. Sum two known days without turning unavailable data into zero; no new target-setting, dieting advice or dashboard required. |
 | **A8 Keep exposed scope deliberate** | Document upstream feature omissions and prefer small shared helpers over parallel implementations | No exercise, fasting, account-target writes or broad delete tools just for parity. Audit modes/tool descriptions against real registration; maintain one canonical roadmap and a short regression checklist. |
@@ -160,3 +163,17 @@ Keep secrets, raw diary data and label photographs out of Git. Retain private
 originals regardless of publication choice. Public submission is separate from
 private creation, and submission is separate from acceptance. Unknown nutrients
 and uncertain side effects must remain explicit throughout the flow.
+
+## Sequence 2 evidence and limits
+
+See [the pilot report](sequence-2-pilot.md) for the exact live measurements and
+synthetic combined-tool coverage. The chocolate limitation was a mode-registration
+gap: `serve-meals` now includes existing product tools, with separate product and
+meal confirmations. It preserves both SQLite files, accepts an explicit product
+store path, and can import host-staged evidence without changing modes.
+
+The systemd installation was left running on its existing revision. An MCP
+connection check succeeded, but this environment cannot write the relocated
+checkout or control the user service. Update/restart locally, refresh the plugin,
+then test the combined surface in a new chat. Native photo upload, public
+submission, custom groups and general diary replacement are not implied.

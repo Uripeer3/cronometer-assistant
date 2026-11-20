@@ -33,8 +33,9 @@ def create_read_only_server(
                 else "This connection cannot log or delete diary entries. "
             )
             + (
-                "Product mode can prepare labels and create NEW private foods only after the user "
-                "asks to save one and reviews the proposal. Include brand and exact variant in its "
+                "Product tools can prepare labels and create NEW private foods only after the user "
+                "asks to save one and reviews the proposal. Pass the current proposal review_token "
+                "to create_verified_cronometer_food. Include brand and exact variant in its "
                 "name; search first and never silently substitute another flavour. Establish whether "
                 "label carbs include fiber; both supported conventions include polyols. "
                 "Preserve sugar alcohols separately. Energy remains the stated label value. "
@@ -53,6 +54,15 @@ def create_read_only_server(
                 "Host references alone do not verify local bytes; these tools never upload to Cronometer. "
                 "Only say photos were filed "
                 "when the host provides a durable file reference or verified archive result. "
+                "When an exact packaged food is missing, offer to create it from its nutrition "
+                "label using these tools; ask for missing label values, serving weight and "
+                "carbohydrate convention. Do not substitute a comparable food without agreement. "
+                "After creation succeeds, inspect and verify the returned food ID for the meal, "
+                "preserving its selection_id when updating the draft. Saving a custom food does "
+                "not log it: review and confirm the meal separately. A logged meal cannot be "
+                "replaced by editing its local draft; identify its owned serving and confirm "
+                "undo and the replacement meal separately. Never claim that saving a new food "
+                "updated an existing diary serving. "
                 if product_service
                 else (
                     "For a new private custom food, use Cronometer's custom-food form. "
@@ -86,12 +96,12 @@ def create_read_only_server(
         except (LiveError, ValidationError) as error:
             return {
                 "ok": False,
-                **(product_service or draft_service or connection).response(error=str(error)),
+                **(draft_service or product_service or connection).response(error=str(error)),
             }
         except Exception:
             return {
                 "ok": False,
-                **(product_service or draft_service or connection).response(
+                **(draft_service or product_service or connection).response(
                     error="Unexpected Cronometer response"
                 ),
             }

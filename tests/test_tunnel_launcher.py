@@ -149,17 +149,18 @@ class TunnelLauncherTests(unittest.TestCase):
         self.assertNotIn("serve-products", child)
         self.assertEqual(child[child.index("--db") + 1], "/data/drafts.sqlite")
 
-    def test_inbox_is_forwarded_only_for_products_and_paths_are_shell_quoted(self):
-        args = launcher.launch_arguments(
-            Path("/client"),
-            "tunnel_" + "a" * 32,
-            Path("/python"),
-            Path("/data/demo.sqlite"),
-            mode="products",
-            evidence_inbox=Path("/private/photo inbox"),
-        )
-        child = shlex.split(args[args.index("--mcp.command") + 1])
-        self.assertEqual(child[child.index("--evidence-inbox") + 1], "/private/photo inbox")
+    def test_inbox_is_forwarded_for_products_and_meals_and_paths_are_shell_quoted(self):
+        for mode in ("products", "meals"):
+            args = launcher.launch_arguments(
+                Path("/client"),
+                "tunnel_" + "a" * 32,
+                Path("/python"),
+                Path("/data/demo.sqlite"),
+                mode=mode,
+                evidence_inbox=Path("/private/photo inbox"),
+            )
+            child = shlex.split(args[args.index("--mcp.command") + 1])
+            self.assertEqual(child[child.index("--evidence-inbox") + 1], "/private/photo inbox")
         with self.assertRaises(ValueError):
             launcher.launch_arguments(
                 Path("/client"),
