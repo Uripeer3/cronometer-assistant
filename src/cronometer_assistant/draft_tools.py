@@ -2,6 +2,8 @@
 
 
 def register_draft_tools(server, service, call):
+    from .item_input import MealItemInput
+
     @server.tool(annotations={"readOnlyHint": False, "destructiveHint": False})
     def verify_food_for_draft(
         food_id: str,
@@ -58,19 +60,28 @@ def register_draft_tools(server, service, call):
     def update_meal_draft(
         meal_id: str,
         expected_revision: int,
-        items: list[dict],
+        items: list[MealItemInput],
         pending_questions: list[str] | None = None,
         intent: str | None = None,
         day: str | None = None,
         meal_group: str | None = None,
         local_time: str | None = None,
     ) -> dict:
-        """Replace the full LOCAL draft. Preserve selection_id from verify_food_for_draft on each item, unanswered questions and estimate assumptions."""
+        """Replace the full LOCAL draft item list, not a patch or a logging subset.
+
+        Start from meal.items, not enriched review.entries. Only send the seven
+        schema fields; food_name/source/nutrients/amount are not input fields.
+        Preserve selection_id from verify_food_for_draft, unanswered questions,
+        estimate assumptions and items the user has not asked to remove.
+        For selected-food logging, save deferred items/questions in a separate
+        draft first, preserving date/group/time, and verify both drafts before
+        logging the ready one. Never drop unresolved foods silently.
+        """
         return call(
             service.update_meal,
             meal_id,
             expected_revision=expected_revision,
-            items=items,
+            items=[item.model_dump() for item in items],
             pending_questions=pending_questions,
             intent=intent,
             day=day,

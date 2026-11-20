@@ -80,6 +80,9 @@ To test it in ChatGPT through an OpenAI private tunnel, use the [tunnel setup gu
 
 Photo-based product entry uses `propose_product_from_label` followed by `save_verified_product`. In demo mode the product is saved in the local demo catalog. `remember_product` records an alias only after the user establishes the preference.
 
+See [meal item fields and selected-food logging](docs/meal-draft-input.md) when
+resuming a dated draft or leaving an unresolved food for later.
+
 ## Development and ownership
 
 Our application is independent of the upstream connector. Only the optional `live` extra depends on [rollecode/cronometer-mcp](https://github.com/rollecode/cronometer-mcp), pinned to commit `e123a4721093efa55adac665e10a546c105eb117`. Nothing from that project has been copied into this source tree. Live login uses hidden local terminal prompts. The meals MCP mode exposes reviewed serving writes through the account-bound diary workflow.

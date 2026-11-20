@@ -35,6 +35,8 @@ def create_server(service: MealService):
     except ImportError as error:
         raise RuntimeError("Install the mcp extra to run the MCP server") from error
 
+    from .item_input import MealItemInput
+
     mcp = FastMCP("Cronometer meal assistant — DEMO", instructions=INSTRUCTIONS)
 
     def call(function, *args, **kwargs):
@@ -63,20 +65,22 @@ def create_server(service: MealService):
     def update_meal_draft(
         meal_id: str,
         expected_revision: int,
-        items: list[dict],
+        items: list[MealItemInput],
         pending_questions: list[str] | None = None,
         intent: str | None = None,
     ) -> dict:
-        """Replace all draft items; include description, food_id, grams, preparation.
+        """Replace all draft items, not a patch or logging subset. Use meal.items,
+        not enriched review.entries; only send the seven schema fields.
 
         Use quantity_basis=estimated or user_default plus assumption when applicable.
         Keep unanswered pending_questions. Set intent=eaten after consumption.
+        Preserve deferred foods in a separate draft before removing them here.
         """
         return call(
             service.update_meal,
             meal_id,
             expected_revision=expected_revision,
-            items=items,
+            items=[item.model_dump() for item in items],
             pending_questions=pending_questions,
             intent=intent,
         )

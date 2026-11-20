@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 from .backend import DemoDiary, DiaryBackend, NoDiary
 from .catalog import Catalog, DemoCatalog, rank_foods
 from .live import MutationNotApplied
-from .models import DiaryEntry, Food, MealItem, ValidationError, normalized, text
+from .models import DiaryEntry, Food, MealItem, ValidationError, normalized, parse_meal_items, text
 from .nutrition import normalize_label, summarize
 from .store import Store
 
@@ -148,12 +148,7 @@ class MealService:
         meal_group: str | None = None,
         local_time: str | None = None,
     ) -> dict:
-        if not isinstance(items, list) or len(items) > 100:
-            raise ValidationError("items must be a complete list of at most 100 foods")
-        try:
-            parsed = [MealItem(**row) for row in items]
-        except TypeError as error:
-            raise ValidationError("Malformed meal item fields") from error
+        parsed = parse_meal_items(items)
         for item in parsed:
             if item.food_id:
                 self._item_food(item.to_dict())

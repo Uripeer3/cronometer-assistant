@@ -11,7 +11,7 @@ from .catalog import CronometerReadOnlyCatalog
 from .live import LiveError, account_timezone, fresh_account_timezone
 from .live_diary import LiveDiary
 from .live_diary import local_time as validated_time
-from .models import Food, ValidationError, normalized, text
+from .models import Food, ValidationError, normalized, parse_meal_items, text
 from .service import MealService
 from .store import ScopedStore
 
@@ -166,8 +166,8 @@ class LiveDraftService(MealService):
 
     def update_meal(self, meal_id, *, items, **kwargs):
         bound = []
-        for item in items:
-            item = dict(item)
+        for parsed in parse_meal_items(items):
+            item = parsed.to_dict()
             if item.get("food_id"):
                 item["selection_id"] = self._item_food(item).selection_id
             bound.append(item)
