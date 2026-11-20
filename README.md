@@ -95,9 +95,12 @@ unit, duplication, and creation-recovery fixes and the product-mode test procedu
 Label carbs now require an explicit fiber convention; raw values and sugar alcohols
 are preserved. The current read-only connection stays read-only.
 
-After updating, an explicit `--mode products` launch adds reviewed private-food
-creation with an account-bound journal and read-back checks. It cannot edit
-existing foods, write a diary, link barcodes, or publish to CRDB. The public
+After updating, `--mode meals` includes reviewed private-food creation alongside
+meal logging, with account-bound journals and read-back checks. An exact product
+missing from search can be prepared from its label, saved privately, verified,
+and added to a separately reviewed meal in the same conversation. The narrower
+`--mode products` remains available without diary access. Neither mode can edit
+existing foods, link native barcodes, or publish to CRDB. The public
 submission tool is a checklist, not a submission API. A controlled private-food creation and UI correction have been exercised; automated
 tests use synthetic data and do not create real foods.
 

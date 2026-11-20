@@ -70,6 +70,11 @@ def main():
     )
     parser.add_argument("--db", type=Path, help="Persistent SQLite path (private runtime data)")
     parser.add_argument(
+        "--products-db",
+        type=Path,
+        help="Meals mode product store (default: products.sqlite beside --db)",
+    )
+    parser.add_argument(
         "--session",
         type=Path,
         default=Path("data/cronometer-session/session.json"),
@@ -81,6 +86,8 @@ def main():
     )
     parser.add_argument("--restore-dir", type=Path, help="New isolated restore directory")
     args = parser.parse_args()
+    if args.products_db is not None and args.command != "serve-meals":
+        parser.error("--products-db is only supported with serve-meals")
     if args.command in {"backup-runtime", "verify-backup", "restore-runtime"}:
         from .backups import create_backup, restore_backup, verify_backup
 
@@ -123,7 +130,7 @@ def main():
                 create_client(
                     args.session,
                     interactive=args.command == "login",
-                    allow_product_creation=args.command == "serve-products",
+                    allow_product_creation=args.command in {"serve-products", "serve-meals"},
                     allow_diary=args.command == "serve-meals",
                 )
             )
@@ -135,12 +142,22 @@ def main():
             else:
                 from .read_only_server import create_read_only_server
 
+                draft_path = args.db or Path(
+                    "data/products.sqlite"
+                    if args.command == "serve-products"
+                    else "data/drafts.sqlite"
+                )
                 products = None
-                if args.command == "serve-products":
+                if args.command in {"serve-products", "serve-meals"}:
                     from .products import ProductService
 
+                    product_path = (
+                        args.products_db or draft_path.with_name("products.sqlite")
+                        if args.command == "serve-meals"
+                        else draft_path
+                    )
                     products = ProductService(
-                        Store(args.db or Path("data/products.sqlite")),
+                        Store(product_path),
                         connection.client,
                         evidence_inbox=args.evidence_inbox,
                     )
@@ -150,10 +167,7 @@ def main():
 
                     service = LiveMealService if args.command == "serve-meals" else LiveDraftService
                     drafts = service(
-                        Store(
-                            args.db
-                            or Path("data/products.sqlite" if products else "data/drafts.sqlite")
-                        ),
+                        Store(draft_path),
                         connection.client,
                     )
                 create_read_only_server(

@@ -260,8 +260,10 @@ profile or Cronometer session. A docs-only change does not require restarting.
    ```
 
    Continue only after the entire block (stop, directory creation, backup and
-   verification) succeeds. If you use product mode,
-   also back up `data/products.sqlite` to a separate new directory. These bundles
+   verification) succeeds. Meals mode now uses product storage too. If
+   `data/products.sqlite` exists, also back it up to a separate new directory
+   with the same backup/verify commands and that database path. If configured
+   with `--products-db`, use that path instead. These bundles
    include managed referenced photos, **not** keys, login sessions, inbox/legacy
    photos, or image bytes stored only at an external reference. See
    [backup and restore](backups.md).
@@ -350,10 +352,23 @@ sharing excerpts.
 
 ## Other modes and limits
 
-`serve-meals` is the everyday diary mode. `serve-products` is a separate mode and
-store for private custom-food workflows; it does not expose diary logging. Photo
-inbox import is explicitly configured for products mode and does not automatically
-receive chat attachments. See [product evidence](product-evidence.md) and
+`serve-meals` is the everyday mode for both diary logging and reviewed private
+custom-food creation. It retains drafts/diary journals in `--db` (default
+`data/drafts.sqlite`) and product proposals/evidence in the sibling
+`products.sqlite`. Use `--products-db /absolute/path/products.sqlite` if your
+existing product database is elsewhere. Both files must be backed up; this update
+does not merge databases or move old aliases/drafts between them. Products saved
+in Cronometer can be searched and verified again from either mode.
+
+After updating the code and restarting systemd, refresh the ChatGPT connection
+and start a new chat. Check that both `prepare_cronometer_product` and `log_meal`
+are present. The existing `serve-meals` profile needs no command change for
+these tools. Product creation requires its own reviewed proposal token; the meal
+still needs a separate review and confirmation.
+
+`serve-products` remains a narrower mode without diary logging. Photo inbox
+import can be configured with `--evidence-inbox` in either meals or products mode;
+it does not automatically receive chat attachments. See [product evidence](product-evidence.md) and
 [private products](review-and-products.md). Native Cronometer photo upload and
 public submission remain roadmap work, not a deployment setting.
 

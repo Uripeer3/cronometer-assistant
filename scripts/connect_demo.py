@@ -204,8 +204,8 @@ def launch_arguments(
             str(database.parent / "cronometer-session/session.json"),
         ]
     if evidence_inbox is not None:
-        if mode != "products":
-            raise ValueError("Photo import requires products mode")
+        if mode not in {"products", "meals"}:
+            raise ValueError("Photo import requires products or meals mode")
         server_args += ["--evidence-inbox", str(evidence_inbox)]
     command = shlex.join(
         [
