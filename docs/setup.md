@@ -82,7 +82,7 @@ Pass an optional flag to `serve` to control which tool groups are exposed:
 
 All text handling is Unicode-native, so conversations, food searches, and personal aliases work in any language. Your AI maps nutrition labels to Cronometer's canonical nutrient names automatically.
 
-To also accept raw localized label headings directly in `create_custom_food` / `update_custom_food`, add normalized entries to `LABEL_ALIASES` in `src/cronometer_assistant/nutrition.py` (English and Hebrew are included):
+To also accept raw localized label headings directly in `create_custom_food` / `update_custom_food`, add entries to `LABEL_ALIASES` in `src/cronometer_assistant/nutrition.py` (keys are case-folded with spaces replaced by `_`; English and Hebrew are included):
 
 ```python
 LABEL_ALIASES = {

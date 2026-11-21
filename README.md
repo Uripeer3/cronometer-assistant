@@ -40,6 +40,10 @@ See [docs/setup.md](docs/setup.md) for ChatGPT, Claude, and Gemini configs, Stre
 
 ## Architecture
 
+```text
+AI Host (ChatGPT / Claude / Gemini) ──MCP──▶ cronometer-assistant ──HTTPS──▶ mobile.cronometer.com
+```
+
 The codebase separates everyday meal logging from optional features and MCP wiring:
 
 ```text
