@@ -108,8 +108,8 @@ def create_read_only_server(
 
     @server.tool(annotations={"readOnlyHint": True})
     def check_cronometer_connection() -> dict:
-        """Verify session with a food-catalog read; returns timezone, never credentials."""
-        return call(connection.check)
+        """Verify session; meals mode reads current profile timezone, other modes label the cached zone."""
+        return call(connection.check, fresh_timezone=live_meals)
 
     @server.tool(annotations={"readOnlyHint": True})
     def search_cronometer_foods(query: str, limit: int = 5) -> dict:

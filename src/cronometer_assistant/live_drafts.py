@@ -12,7 +12,7 @@ from .live import LiveError, account_timezone, fresh_account_timezone
 from .live_diary import LiveDiary
 from .live_diary import local_time as validated_time
 from .models import Food, ValidationError, normalized, parse_meal_items, text
-from .service import MealService
+from .service import MealService, calendar_day
 from .store import ScopedStore
 
 
@@ -220,12 +220,55 @@ class LiveMealService(LiveDraftService):
         return {**super().response(), "mode": "cronometer_live", **data}
 
     def begin_meal(self, title, *, day=None, local_time=None, **kwargs):
-        now = datetime.now(self.timezone)
+        # Login/session timezone can be stale after an app-side profile change.
+        # Use a per-call snapshot; existing drafts need explicit review.
+        timezone = ZoneInfo(fresh_account_timezone(self.client))
+        now = datetime.now(timezone)
         if local_time is not None:
             local_time = validated_time(local_time)
         elif day is None or day == now.date().isoformat():
             local_time = now.time().isoformat(timespec="seconds")
-        return super().begin_meal(title, day=day, local_time=local_time, **kwargs)
+        return self._begin_meal(
+            title,
+            timezone=timezone,
+            day=day if day is not None else now.date().isoformat(),
+            local_time=local_time,
+            **kwargs,
+        )
+
+    def confirm_meal_timezone(
+        self, meal_id, *, expected_revision, timezone, day, local_time, confirmed=False
+    ):
+        """Rebind an unlogged draft to a reviewed zone and explicit wall date/time."""
+        if confirmed is not True:
+            raise ValidationError("Confirm the account timezone, meal date and local time first")
+        timezone = account_timezone(timezone)
+        day = calendar_day(day)
+        local_time = validated_time(local_time)
+        with self.store.locked():
+            meal = self._meal(meal_id)
+            if type(expected_revision) is not int or meal["revision"] != expected_revision:
+                raise ValidationError(
+                    "Draft changed; retrieve its current revision before updating"
+                )
+            if self.store.get("operations", meal_id) is not None:
+                raise ValidationError("A meal with a logging operation cannot change timezone")
+            current = fresh_account_timezone(self.client)
+            if timezone != current:
+                raise ValidationError(f"Account timezone is now {current}; review again")
+            previous = meal["timezone"]
+            meal.update(timezone=timezone, day=day, local_time=local_time)
+            meal["timezone_review"] = {
+                "previous_timezone": previous,
+                "timezone": timezone,
+                "day": day,
+                "local_time": local_time,
+            }
+            meal["revision"] += 1
+            review = self._review(meal)
+            meal["state"] = "needs_clarification" if review["questions"] else "ready"
+            self.store.put("meals", meal_id, meal)
+            return self._with_review_token(self.response(meal=meal, review=review))
 
     def update_meal(self, meal_id, *, local_time=None, **kwargs):
         if local_time is not None:
@@ -244,8 +287,13 @@ class LiveMealService(LiveDraftService):
         return review
 
     def _plan(self, meal):
-        if fresh_account_timezone(self.client) != meal["timezone"]:
-            raise ValidationError("Cronometer's timezone changed; review the date and time again")
+        current_timezone = fresh_account_timezone(self.client)
+        if current_timezone != meal["timezone"]:
+            raise ValidationError(
+                f"Draft timezone is {meal['timezone']}; current account timezone is "
+                f"{current_timezone}. Use confirm_meal_timezone with the current revision "
+                "and the user's confirmed timezone, date and local time, then review again."
+            )
         result = []
         for item in meal["items"]:
             food = self._item_food(item)

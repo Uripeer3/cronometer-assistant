@@ -10,6 +10,7 @@ from cronometer_assistant.models import ValidationError
 class DailyNutritionTests(unittest.TestCase):
     def setUp(self):
         self.client = Mock(_timezone="Asia/Damascus")
+        self.client.get_profile.return_value = {"timezone": "Asia/Damascus"}
         self.client.get_nutrition_scores.return_value = {
             "scores": [
                 {
@@ -57,6 +58,24 @@ class DailyNutritionTests(unittest.TestCase):
         for value in ("2026-02-30", "20261118", "today", 20261118):
             with self.subTest(value=value), self.assertRaises(ValidationError):
                 daily_nutrition(self.client, value)
+        self.client.get_nutrition_scores.assert_not_called()
+        self.client.get_profile.assert_not_called()
+
+    def test_default_day_follows_fresh_profile_when_cached_zone_is_stale(self):
+        self.client.get_profile.return_value = {"timezone": "America/Los_Angeles"}
+        moment = datetime(2026, 11, 17, 22, 30, tzinfo=UTC)
+        with patch("cronometer_assistant.daily_nutrition.datetime") as clock:
+            clock.now.side_effect = moment.astimezone
+            result = daily_nutrition(self.client)
+        self.assertEqual(result["date"], "2026-11-17")
+        self.assertEqual(result["account_timezone"], "America/Los_Angeles")
+        self.client.get_nutrition_scores.assert_called_once_with(date(2026, 11, 17))
+        self.assertEqual(self.client._timezone, "Asia/Damascus")
+
+    def test_missing_profile_zone_blocks_totals_instead_of_using_cache(self):
+        self.client.get_profile.return_value = {}
+        with self.assertRaises(LiveError):
+            daily_nutrition(self.client)
         self.client.get_nutrition_scores.assert_not_called()
 
     def test_response_error_is_scrubbed_and_expired_session_is_actionable(self):

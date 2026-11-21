@@ -234,6 +234,8 @@ class MealRecoveryRegressionTests(unittest.TestCase):
         ):
 
             def respond(request, components=components):
+                if request.url.path.endswith("get_profile"):
+                    return httpx.Response(200, json={"timezone": self.profile_timezone})
                 if request.url.path.endswith("get_diary"):
                     return httpx.Response(200, json={"diary": [], "info": {"day": DAY}})
                 if request.url.path.endswith("get_nutrition_scores"):
@@ -306,6 +308,8 @@ class MealRecoveryRegressionTests(unittest.TestCase):
 
         def respond(request):
             requests.append(request.url.path)
+            if request.url.path.endswith("get_profile"):
+                return httpx.Response(200, json={"timezone": self.profile_timezone})
             if request.url.path.endswith("get_diary"):
                 return httpx.Response(200, json={})
             return httpx.Response(
@@ -320,7 +324,7 @@ class MealRecoveryRegressionTests(unittest.TestCase):
         with patch.object(self.client._http, "_transport", httpx.MockTransport(respond)):
             with self.assertRaises(LiveError):
                 daily_nutrition(self.client, DAY)
-        self.assertEqual(requests, ["/api/v2/get_diary"])
+        self.assertEqual(requests, ["/api/v2/get_profile", "/api/v2/get_diary"])
 
 
 class ProductReviewRegressionTests(unittest.TestCase):

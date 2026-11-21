@@ -7,6 +7,35 @@ from .diary_changes import DiaryChanges
 def register_meal_tools(server, service, call):
     changes = DiaryChanges(service)
 
+    @server.tool(annotations={"readOnlyHint": False, "destructiveHint": False})
+    def confirm_meal_timezone(
+        meal_id: str,
+        expected_revision: int,
+        timezone: str,
+        day: str,
+        local_time: str,
+        confirmed: bool,
+    ) -> dict:
+        """Acknowledge a timezone change for an unlogged draft; no diary write.
+
+        Use the current account timezone reported by preflight/connection check.
+        Pass the user's explicitly confirmed YYYY-MM-DD and HH:MM wall time;
+        never shift them automatically or assume two named zones are equivalent.
+        Existing approval is sufficient if it covers these exact values.
+        This increments the revision and invalidates old review tokens. Review
+        the returned date/time/items before logging. Logged/attempted meals are
+        immutable here; inspect their operation rather than creating a duplicate.
+        """
+        return call(
+            service.confirm_meal_timezone,
+            meal_id,
+            expected_revision=expected_revision,
+            timezone=timezone,
+            day=day,
+            local_time=local_time,
+            confirmed=confirmed,
+        )
+
     @server.tool(annotations={"readOnlyHint": True})
     def get_daily_nutrition(day: str | None = None) -> dict:
         """Read Cronometer totals for a full diary day, including manually logged foods."""

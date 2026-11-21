@@ -67,8 +67,21 @@ class MealService:
         intent: str = "preparing",
         local_time: str | None = None,
     ) -> dict:
+        return self._begin_meal(
+            title,
+            timezone=self.timezone,
+            day=day,
+            meal_group=meal_group,
+            intent=intent,
+            local_time=local_time,
+        )
+
+    def _begin_meal(
+        self, title, *, timezone, day=None, meal_group="lunch", intent="preparing", local_time=None
+    ) -> dict:
+        """Construct from one per-call timezone snapshot, without changing shared defaults."""
         title = text(title, "meal title")
-        day = day or datetime.now(self.timezone).date().isoformat()
+        day = day or datetime.now(timezone).date().isoformat()
         day = calendar_day(day)
         if meal_group not in GROUPS:
             raise ValidationError("Choose breakfast, lunch, dinner, or snack")
@@ -78,7 +91,7 @@ class MealService:
             "meal_id": uuid4().hex,
             "title": title,
             "day": day,
-            "timezone": str(self.timezone),
+            "timezone": str(timezone),
             "meal_group": meal_group,
             "intent": intent,
             "revision": 0,
