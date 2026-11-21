@@ -340,23 +340,15 @@ class DiaryService:
             time=wall_time,
         )
 
-    def log_food_entries(
+    def _plan_log_entries(
         self,
         entries: list[dict[str, Any]],
         *,
-        day: str | None = None,
-        meal_group: str | int = "auto",
-        time: str | None = None,
-        request_id: str | None = None,
-    ) -> dict[str, Any]:
-        """Log one or more food servings in a single validated, read-back-verified operation."""
-        if not isinstance(entries, list) or not entries or len(entries) > 50:
-            raise ValidationError("entries must be a non-empty list of at most 50 items")
-
-        explicit_day = parse_day(day)
-        default_group = parse_meal_group(meal_group, allow_auto=True)
-        default_time = parse_time(time)
-
+        explicit_day: date | None,
+        default_group: int | None,
+        default_time: dtime | None,
+    ) -> tuple[list[dict[str, Any]], dict[int, dict[str, Any]], bool, str]:
+        """Validate entries, resolve amounts/measures, and compute the logical fingerprint."""
         food_ids: list[int] = []
         for idx, item in enumerate(entries):
             if not isinstance(item, dict):
@@ -437,6 +429,171 @@ class DiaryService:
                 sort_keys=True,
             ).encode()
         ).hexdigest()
+        return planned, foods_by_id, needs_now, fingerprint
+
+    def _reconcile_sending_steps(
+        self,
+        *,
+        planned: list[dict[str, Any]],
+        journal_steps: list[dict[str, Any]],
+        foods_by_id: dict[int, dict[str, Any]],
+        target_day: date,
+        request_id: str,
+        fingerprint: str,
+    ) -> None:
+        """Match previously interrupted `sending` steps strictly by food, grams, measure, group, and time."""
+        assert self.state is not None
+        diary_now = self.client.get_diary(target_day)
+        claimed = {s["entry_id"] for s in journal_steps if s.get("entry_id") is not None}
+        for idx, (step, jstep) in enumerate(zip(planned, journal_steps, strict=True)):
+            if jstep["status"] != "sending":
+                continue
+            baseline = set(jstep.get("baseline_ids") or [])
+            raw_food = foods_by_id[step["food_id"]]
+            candidates: list[int] = []
+            nearby: list[dict[str, Any]] = []
+            for row in diary_now.get("diary", []):
+                if not isinstance(row, dict) or row.get("type") != "Serving":
+                    continue
+                sid = row.get("servingId")
+                if sid in baseline or sid in claimed:
+                    continue
+                check = self._verify_serving_row(
+                    row,
+                    raw_food,
+                    expected_food_id=step["food_id"],
+                    expected_grams=step["grams"],
+                    expected_measure_id=step["measure_id"],
+                    expected_group_id=step["group_id"],
+                    expected_time=step["wall_time"],
+                )
+                if check["verified"]:
+                    candidates.append(sid)
+                elif check["food_id"] == step["food_id"] and (
+                    check["grams"] is not None
+                    and math.isclose(check["grams"], step["grams"], rel_tol=1e-3, abs_tol=0.05)
+                ):
+                    nearby.append(
+                        {
+                            "entry_id": sid,
+                            "grams": check["grams"],
+                            "meal_group": check["meal_group"],
+                            "time": check["time"],
+                        }
+                    )
+            if len(candidates) == 1:
+                jstep["entry_id"] = candidates[0]
+                jstep["status"] = "confirmed"
+                claimed.add(candidates[0])
+                self.state.save_operation(
+                    request_id,
+                    "log_food_entries",
+                    fingerprint=fingerprint,
+                    status="in_progress",
+                    data={"day": target_day.isoformat(), "steps": journal_steps},
+                )
+            else:
+                nearby_note = (
+                    f" Unclaimed entries with the same food/weight at a different time or "
+                    f"meal group were not adopted: {nearby}."
+                    if nearby
+                    else ""
+                )
+                raise CronometerError(
+                    f"Previous attempt for item {idx} ({step['food_name']!r}) has an "
+                    f"uncertain outcome ({len(candidates)} exact matching entries found). "
+                    f"Check get_food_log for {target_day.isoformat()} before retrying."
+                    f"{nearby_note}"
+                )
+
+    def _verify_logged_batch(
+        self,
+        *,
+        planned: list[dict[str, Any]],
+        added_ids: list[int],
+        foods_by_id: dict[int, dict[str, Any]],
+        target_day: date,
+    ) -> dict[str, Any]:
+        """Read back the diary day and compare every logged serving against the request."""
+        diary_after = self.client.get_diary(target_day)
+        by_sid = {
+            e.get("servingId"): e
+            for e in diary_after.get("diary", [])
+            if isinstance(e, dict) and e.get("type") == "Serving"
+        }
+        missing = [sid for sid in added_ids if sid not in by_sid]
+        if missing:
+            raise CronometerError(
+                f"Read-back verification failed: serving IDs {missing} not found on {target_day.isoformat()}"
+            )
+
+        logged_out = []
+        all_verified = True
+        all_mismatches: list[dict[str, Any]] = []
+        for idx, step in enumerate(planned):
+            row = by_sid[step["entry_id"]]
+            raw_food = foods_by_id[step["food_id"]]
+            check = self._verify_serving_row(
+                row,
+                raw_food,
+                expected_food_id=step["food_id"],
+                expected_grams=step["grams"],
+                expected_measure_id=step["measure_id"],
+                expected_group_id=step["group_id"],
+                expected_time=step["wall_time"],
+            )
+            if not check["verified"]:
+                all_verified = False
+                all_mismatches.append(
+                    {"index": idx, "entry_id": step["entry_id"], "issues": check["mismatches"]}
+                )
+            item_out: dict[str, Any] = {
+                "entry_id": step["entry_id"],
+                "food_id": check["food_id"],
+                "food_name": step["food_name"],
+                "grams": check["grams"],
+                "measure_id": check["measure_id"],
+                "measure_name": step["measure_name"],
+                "meal_group": check["meal_group"],
+                "time": check["time"],
+                "verified": check["verified"],
+            }
+            if check["mismatches"]:
+                item_out["verification_mismatches"] = check["mismatches"]
+            logged_out.append(item_out)
+
+        response: dict[str, Any] = {
+            "date": target_day.isoformat(),
+            "logged_count": len(logged_out),
+            "logged": logged_out,
+            "verified": all_verified,
+            "already_logged": False,
+            "energy_summary": extract_energy_summary(diary_after),
+        }
+        if all_mismatches:
+            response["verification_mismatches"] = all_mismatches
+        return response
+
+    def log_food_entries(
+        self,
+        entries: list[dict[str, Any]],
+        *,
+        day: str | None = None,
+        meal_group: str | int = "auto",
+        time: str | None = None,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Log one or more food servings in a single validated, read-back-verified operation."""
+        if not isinstance(entries, list) or not entries or len(entries) > 50:
+            raise ValidationError("entries must be a non-empty list of at most 50 items")
+
+        explicit_day = parse_day(day)
+        planned, foods_by_id, needs_now, fingerprint = self._plan_log_entries(
+            entries,
+            explicit_day=explicit_day,
+            default_group=parse_meal_group(meal_group, allow_auto=True),
+            default_time=parse_time(time),
+        )
 
         with self._op_lock():
             journal_steps: list[dict[str, Any]] | None = None
@@ -460,7 +617,6 @@ class DiaryService:
             if target_day is None:
                 target_day = explicit_day if explicit_day is not None else self._resolve_day(None)
                 if explicit_day is not None and needs_now:
-                    # Explicit day with wall-clock time="now": ensure account timezone is fresh.
                     self.client.sync_timezone(force=True)
 
             # Resolve concrete time and meal group BEFORE journaling or sending so recovery
@@ -493,75 +649,17 @@ class DiaryService:
                     data={"day": target_day.isoformat(), "steps": journal_steps},
                 )
 
-            # Reconcile any previously-interrupted `sending` step before writing anything new.
             if journal_steps is not None and any(s["status"] == "sending" for s in journal_steps):
-                diary_now = self.client.get_diary(target_day)
-                claimed = {s["entry_id"] for s in journal_steps if s.get("entry_id") is not None}
-                for idx, (step, jstep) in enumerate(zip(planned, journal_steps, strict=True)):
-                    if jstep["status"] != "sending":
-                        continue
-                    baseline = set(jstep.get("baseline_ids") or [])
-                    raw_food = foods_by_id[step["food_id"]]
-                    candidates: list[int] = []
-                    nearby: list[dict[str, Any]] = []
-                    for row in diary_now.get("diary", []):
-                        if not isinstance(row, dict) or row.get("type") != "Serving":
-                            continue
-                        sid = row.get("servingId")
-                        if sid in baseline or sid in claimed:
-                            continue
-                        check = self._verify_serving_row(
-                            row,
-                            raw_food,
-                            expected_food_id=step["food_id"],
-                            expected_grams=step["grams"],
-                            expected_measure_id=step["measure_id"],
-                            expected_group_id=step["group_id"],
-                            expected_time=step["wall_time"],
-                        )
-                        if check["verified"]:
-                            candidates.append(sid)
-                        elif check["food_id"] == step["food_id"] and (
-                            check["grams"] is not None
-                            and math.isclose(
-                                check["grams"], step["grams"], rel_tol=1e-3, abs_tol=0.05
-                            )
-                        ):
-                            nearby.append(
-                                {
-                                    "entry_id": sid,
-                                    "grams": check["grams"],
-                                    "meal_group": check["meal_group"],
-                                    "time": check["time"],
-                                }
-                            )
-                    if len(candidates) == 1:
-                        jstep["entry_id"] = candidates[0]
-                        jstep["status"] = "confirmed"
-                        claimed.add(candidates[0])
-                        assert request_id and self.state
-                        self.state.save_operation(
-                            request_id,
-                            "log_food_entries",
-                            fingerprint=fingerprint,
-                            status="in_progress",
-                            data={"day": target_day.isoformat(), "steps": journal_steps},
-                        )
-                    else:
-                        nearby_note = (
-                            f" Unclaimed entries with the same food/weight at a different time or "
-                            f"meal group were not adopted: {nearby}."
-                            if nearby
-                            else ""
-                        )
-                        raise CronometerError(
-                            f"Previous attempt for item {idx} ({step['food_name']!r}) has an "
-                            f"uncertain outcome ({len(candidates)} exact matching entries found). "
-                            f"Check get_food_log for {target_day.isoformat()} before retrying."
-                            f"{nearby_note}"
-                        )
+                assert request_id
+                self._reconcile_sending_steps(
+                    planned=planned,
+                    journal_steps=journal_steps,
+                    foods_by_id=foods_by_id,
+                    target_day=target_day,
+                    request_id=request_id,
+                    fingerprint=fingerprint,
+                )
 
-            # Capture baseline serving IDs once if we are tracking durable idempotency
             known_ids: set[int] = set()
             if journal_steps is not None and any(s["status"] == "pending" for s in journal_steps):
                 before = self.client.get_diary(target_day)
@@ -624,64 +722,13 @@ class DiaryService:
                         data={"day": target_day.isoformat(), "steps": journal_steps},
                     )
 
-            diary_after = self.client.get_diary(target_day)
-            by_sid = {
-                e.get("servingId"): e
-                for e in diary_after.get("diary", [])
-                if isinstance(e, dict) and e.get("type") == "Serving"
-            }
-            missing = [sid for sid in added_ids if sid not in by_sid]
-            if missing:
-                raise CronometerError(
-                    f"Read-back verification failed: serving IDs {missing} not found on {target_day.isoformat()}"
-                )
-
-            logged_out = []
-            all_verified = True
-            all_mismatches: list[dict[str, Any]] = []
-            for idx, step in enumerate(planned):
-                row = by_sid[step["entry_id"]]
-                raw_food = foods_by_id[step["food_id"]]
-                check = self._verify_serving_row(
-                    row,
-                    raw_food,
-                    expected_food_id=step["food_id"],
-                    expected_grams=step["grams"],
-                    expected_measure_id=step["measure_id"],
-                    expected_group_id=step["group_id"],
-                    expected_time=step["wall_time"],
-                )
-                if not check["verified"]:
-                    all_verified = False
-                    all_mismatches.append(
-                        {"index": idx, "entry_id": step["entry_id"], "issues": check["mismatches"]}
-                    )
-                item_out: dict[str, Any] = {
-                    "entry_id": step["entry_id"],
-                    "food_id": check["food_id"],
-                    "food_name": step["food_name"],
-                    "grams": check["grams"],
-                    "measure_id": check["measure_id"],
-                    "measure_name": step["measure_name"],
-                    "meal_group": check["meal_group"],
-                    "time": check["time"],
-                    "verified": check["verified"],
-                }
-                if check["mismatches"]:
-                    item_out["verification_mismatches"] = check["mismatches"]
-                logged_out.append(item_out)
-
-            response: dict[str, Any] = {
-                "date": target_day.isoformat(),
-                "logged_count": len(logged_out),
-                "logged": logged_out,
-                "verified": all_verified,
-                "already_logged": False,
-                "energy_summary": extract_energy_summary(diary_after),
-            }
-            if all_mismatches:
-                response["verification_mismatches"] = all_mismatches
-            if request_id and self.state and all_verified:
+            response = self._verify_logged_batch(
+                planned=planned,
+                added_ids=added_ids,
+                foods_by_id=foods_by_id,
+                target_day=target_day,
+            )
+            if request_id and self.state and response["verified"]:
                 self.state.save_idempotent(
                     request_id, "log_food_entries", response, fingerprint=fingerprint
                 )

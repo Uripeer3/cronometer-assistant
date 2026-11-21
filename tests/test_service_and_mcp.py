@@ -678,7 +678,7 @@ class ServiceAndMCPTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             self.assistant.diary.log_food_entries([{"food_id": fid, "grams": 60}], day="2026-11-21")
 
-        recipe = self.assistant.custom.save_recipe(
+        recipe = self.assistant.recipes.save_recipe(
             "Cooked Rice & Pretzel Mix",
             [
                 {"food_id": 460334, "grams": 300},
@@ -692,7 +692,7 @@ class ServiceAndMCPTests(unittest.TestCase):
         self.assertAlmostEqual(recipe["servings"], 2.0)
 
         # Updating recipe servings from 2 -> 4 actually updates serving measure (140g -> 70g)
-        edited_recipe = self.assistant.custom.save_recipe(
+        edited_recipe = self.assistant.recipes.save_recipe(
             "Cooked Rice & Pretzel Mix",
             [
                 {"food_id": 460334, "grams": 300},
@@ -708,7 +708,7 @@ class ServiceAndMCPTests(unittest.TestCase):
         self.assertAlmostEqual(srv_m["grams_per_unit"], 70.0, places=2)
 
         # Omitting servings on update preserves existing serving count (4)
-        kept_recipe = self.assistant.custom.save_recipe(
+        kept_recipe = self.assistant.recipes.save_recipe(
             "Cooked Rice & Pretzel Mix v2",
             [
                 {"food_id": 460334, "grams": 300},
@@ -1069,7 +1069,7 @@ class ServiceAndMCPTests(unittest.TestCase):
         )
 
         # 3) Nesting 100 g of this native recipe in a weight recipe contributes 130 kcal (not 520)
-        nested = self.assistant.custom.save_recipe(
+        nested = self.assistant.recipes.save_recipe(
             "Rice Bowl Wrapper",
             [{"food_id": 9801, "grams": 100}],
             servings=1,
@@ -1088,7 +1088,7 @@ class ServiceAndMCPTests(unittest.TestCase):
 
     def test_recipe_edit_preserves_cooked_weight_and_servings_recipe_measure_ids(self):
         # Release gate A: 400 g raw / 250 g cooked weight recipe, 2 servings (125 g each)
-        w_recipe = self.assistant.custom.save_recipe(
+        w_recipe = self.assistant.recipes.save_recipe(
             "Cooked Rice Pot",
             [{"food_id": 460334, "grams": 400}],
             servings=2,
@@ -1109,7 +1109,7 @@ class ServiceAndMCPTests(unittest.TestCase):
         self.assertAlmostEqual(w_log["logged"][0]["grams"], 125.0, places=2)
 
         # Change servings from 2 -> 4 while OMITTING cooked_grams and notes
-        w_edited = self.assistant.custom.save_recipe(
+        w_edited = self.assistant.recipes.save_recipe(
             "Cooked Rice Pot",
             [{"food_id": 460334, "grams": 400}],
             servings=4,
@@ -1128,7 +1128,7 @@ class ServiceAndMCPTests(unittest.TestCase):
         self.assertIsNotNone(hist_w["servings"][0]["measure"])
 
         # Release gate B: servings-based (meal=True) recipe edit preserves measure IDs
-        s_recipe = self.assistant.custom.save_recipe(
+        s_recipe = self.assistant.recipes.save_recipe(
             "Native Rice Servings",
             [{"food_id": 460334, "grams": 400}],
             servings=2,
@@ -1146,7 +1146,7 @@ class ServiceAndMCPTests(unittest.TestCase):
         )
         self.assertAlmostEqual(s_log["logged"][0]["grams"], 200.0, places=2)
 
-        s_edited = self.assistant.custom.save_recipe(
+        s_edited = self.assistant.recipes.save_recipe(
             "Native Rice Servings",
             [{"food_id": 460334, "grams": 400}],
             servings=4,

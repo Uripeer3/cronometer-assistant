@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from .auth import CronometerSessionClient
-from .core import CustomFoodService, DiaryService, FoodService
+from .core import CustomFoodService, DiaryService, FoodService, RecipeService
 from .extras import DiaryExtrasService, TargetsService, TrackingService
 from .state import AssistantState
 
@@ -12,9 +12,10 @@ class CronometerAssistant:
     """Single entry object exposing cleanly grouped domain services.
 
     Core everyday logging:
-      - `assistant.foods`  (connection, search, details, my_foods, nutrients, aliases)
-      - `assistant.diary`  (food_log, log/edit/remove servings, optional cooking drafts)
-      - `assistant.custom` (custom foods create/update/retire, recipes)
+      - `assistant.foods`   (connection, search, details, my_foods, nutrients, aliases)
+      - `assistant.diary`   (food_log, log/edit/remove servings, optional cooking drafts)
+      - `assistant.custom`  (custom foods create/update/retire)
+      - `assistant.recipes` (weight-based and servings-based recipes)
 
     Optional / secondary features:
       - `assistant.diary_extras` (mark_day_complete, copy_day, find_entries_by_food, notes)
@@ -32,6 +33,7 @@ class CronometerAssistant:
         self.foods = FoodService(client, state)
         self.diary = DiaryService(client, state)
         self.custom = CustomFoodService(client, state)
+        self.recipes = RecipeService(client, state)
 
         # Cleanly isolated secondary features
         self.diary_extras = DiaryExtrasService(client)

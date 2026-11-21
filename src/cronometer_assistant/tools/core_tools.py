@@ -111,7 +111,7 @@ class DraftItemInput(BaseModel):
 def register_core_tools(
     mcp: FastMCP, assistant: CronometerAssistant, run: Callable[..., str]
 ) -> None:
-    """Register the 18 core food, diary, custom-food, recipe, alias, and draft tools."""
+    """Register the 19 core food, diary, custom-food, recipe, alias, and draft tools."""
 
     # --- Read & Discovery ---
 
@@ -314,7 +314,7 @@ def register_core_tools(
         serving count on update unless a new value is provided.
         """
         return run(
-            assistant.custom.save_recipe,
+            assistant.recipes.save_recipe,
             name,
             [i.model_dump(exclude_none=True) for i in ingredients],
             servings=servings,
