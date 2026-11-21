@@ -367,13 +367,18 @@ class ReadOnlyConnection:
                 "Cronometer read failed; check connection or sign in again locally"
             ) from None
 
-    def check(self):
+    def check(self, *, fresh_timezone=False):
         # Make an authenticated read: a cached token alone is not proof of connectivity.
         self.client._nutrient_defs = None
         definitions = self._read(self.client.get_nutrient_definitions)
         return self.response(
             connected=True,
-            account_timezone=account_timezone(self.client._timezone),
+            account_timezone=(
+                fresh_account_timezone(self.client)
+                if fresh_timezone
+                else account_timezone(self.client._timezone)
+            ),
+            timezone_source="current_profile" if fresh_timezone else "cached_session",
             nutrient_definition_count=len(definitions),
         )
 

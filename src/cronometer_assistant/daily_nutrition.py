@@ -4,7 +4,7 @@ import math
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
-from .live import LiveError, LoginRequired, account_timezone
+from .live import LiveError, LoginRequired, fresh_account_timezone
 from .models import ValidationError, number
 
 # Stable Cronometer IDs used by the pinned client's daily macro summary.
@@ -31,7 +31,7 @@ def daily_nutrition(client, day: str | None = None) -> dict:
 
     if client._timezone is None:
         raise LoginRequired("Session expired or absent; run login in your terminal")
-    timezone = account_timezone(client._timezone)
+    timezone = fresh_account_timezone(client)
     if day is None:
         selected_day = datetime.now(ZoneInfo(timezone)).date()
 

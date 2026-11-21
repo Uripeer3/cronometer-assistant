@@ -1,7 +1,7 @@
 # Current roadmap and acceptance tests
 
-Updated 20 November 2026. Current deployed baseline: `main` at
-`6b0c118d8d56fb74207fba826c4a853c34e2e2f5` (merged PR #19).
+Updated 21 November 2026. Current deployed baseline: `main` at
+`935e3d1cd431399cd5147518aecbebd6a585e5e9` (merged PR #21).
 The original audit covered PR #16; sequence 1 (#18) fixed its bounded correctness
 findings and sequence 2 (#19) combined the tools and passed the scoped live pilot.
 The relocated checkout is now clean on this main revision. A live MCP connection
@@ -9,10 +9,17 @@ check succeeds, and refreshed discovery exposes product creation, meal logging
 and unsent-item cancellation together. Both runtime backups verify successfully.
 The first conversational pilot exposed a draft-input schema gap: the tool
 advertised generic objects while the service accepted seven specific fields.
-The follow-up fix exposes those fields in live/demo MCP schemas and validates
-malformed replacements before food lookup or draft mutation. Deployment and
-the user's conversational retry remain pending; the earlier live pilot did not
+PR #21 exposes those fields in live/demo MCP schemas and validates
+malformed replacements before food lookup or draft mutation. It is deployed;
+the user's conversational retry successfully saved the selected items, but the earlier live pilot did not
 exercise this failure. See [draft input and selected-food logging](meal-draft-input.md).
+The subsequent conversational retry saved all selected foods, but exposed a
+second blocker: the cached session zone differed from the fresh account profile,
+and the preflight error offered no acknowledgement action. The follow-up adds
+`confirm_meal_timezone` for unlogged drafts, current-profile timezone reporting
+in meals mode, and fresh-zone defaults for new meals and daily totals. Synthetic tests cover
+revision/token invalidation and continued blocking after a second profile change.
+Runtime deployment and actual diary upload remain separate acceptance steps.
 This is one person's meal-logging utility: one Python service, SQLite, private
 files and the existing MCP tunnel. Complete the everyday flow before adding more
 interfaces. Android hosting is deferred at the user's request.

@@ -54,3 +54,31 @@ using the [setup/update guide](setup-and-operations.md). Then refresh the
 ChatGPT connection's tools and use a new chat if it still has the old schema.
 Refreshing tools alone does not reload Python code. Confirm `update_meal_draft`
 shows the seven item fields before retrying. No database migration is required.
+
+## Recovering from a changed account timezone
+
+The login session can retain an old timezone after the profile changes in
+Cronometer. In meals mode, `check_cronometer_connection` now reads the current
+profile and labels it `timezone_source=current_profile`. Other modes label
+their food-only connection check's timezone `cached_session`; it is not proof
+of the current profile zone. New meals and default-day nutrition totals use the
+freshly read profile timezone without mutating shared session defaults.
+
+Existing drafts keep their original zone until explicitly acknowledged. When
+preflight reports both the draft and current account zones:
+
+1. Establish the intended local calendar date and wall time in the current zone.
+   Existing user approval suffices if it covers those exact values. Never assume
+   two zone names are interchangeable because their offsets sometimes match.
+2. Call `confirm_meal_timezone` with the draft ID, current revision, exact current
+   timezone, explicit `day`, `local_time`, and `confirmed=true`. This preserves
+   the supplied date/time without converting it and leaves foods, quantities,
+   questions, intent and meal group untouched. It does not write to the diary
+   or alter the Cronometer profile.
+3. Review the returned draft and use its new revision/token when logging. Old
+   tokens are invalidated. If the profile changes again, acknowledge the newly
+   observed values before retrying; there is no bypass flag.
+
+This applies only before any logging operation exists. For an attempted or
+uncertain operation, inspect logging status and follow recovery instructions;
+never rebind it or create a duplicate meal to evade the existing operation.
