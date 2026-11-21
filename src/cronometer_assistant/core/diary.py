@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import threading
 from copy import deepcopy
 from datetime import date
 from datetime import time as dtime
@@ -21,6 +22,7 @@ from ..parsing import (
     extract_key_macros,
     format_api_time,
     is_recipe_food,
+    meal_group_for_hour,
     parse_day,
     parse_meal_group,
     parse_time,
@@ -36,6 +38,10 @@ class DiaryService:
     ) -> None:
         self.client = client
         self.state = state
+        self._write_lock = threading.RLock()
+
+    def _op_lock(self):
+        return self.state.operation_lock() if self.state is not None else self._write_lock
 
     def _resolve_day(self, day_str: str | None) -> date:
         parsed = parse_day(day_str)
@@ -347,7 +353,7 @@ class DiaryService:
         if not isinstance(entries, list) or not entries or len(entries) > 50:
             raise ValidationError("entries must be a non-empty list of at most 50 items")
 
-        target_day = self._resolve_day(day)
+        explicit_day = parse_day(day)
         default_group = parse_meal_group(meal_group, allow_auto=True)
         default_time = parse_time(time)
 
@@ -408,14 +414,12 @@ class DiaryService:
                 }
             )
 
-        if needs_now and day is not None:
-            # Explicit day with wall-clock time="now": ensure account timezone is fresh.
-            self.client.sync_timezone(force=True)
-
+        # Fingerprint uses caller-supplied logical inputs (including `day=None` when omitted) so
+        # retrying after midnight recovers the originally journaled date instead of rejecting itself.
         fingerprint = hashlib.sha256(
             json.dumps(
                 {
-                    "day": target_day.isoformat(),
+                    "day": explicit_day.isoformat() if explicit_day is not None else None,
                     "steps": [
                         {
                             "food_id": s["food_id"],
@@ -434,18 +438,52 @@ class DiaryService:
             ).encode()
         ).hexdigest()
 
-        journal_steps: list[dict[str, Any]] | None = None
-        if request_id and self.state:
-            existing_op = self.state.get_operation(
-                request_id, "log_food_entries", fingerprint=fingerprint
-            )
-            if existing_op is not None:
-                if existing_op["status"] == "completed":
-                    return {**existing_op["data"], "already_logged": True}
-                journal_steps = existing_op["data"]["steps"]
-            else:
+        with self._op_lock():
+            journal_steps: list[dict[str, Any]] | None = None
+            target_day: date | None = None
+
+            if request_id and self.state:
+                existing_op = self.state.get_operation(
+                    request_id, "log_food_entries", fingerprint=fingerprint
+                )
+                if existing_op is not None:
+                    if existing_op["status"] == "completed":
+                        return {**existing_op["data"], "already_logged": True}
+                    target_day = date.fromisoformat(existing_op["data"]["day"])
+                    journal_steps = existing_op["data"]["steps"]
+                    for step, jstep in zip(planned, journal_steps, strict=True):
+                        if jstep.get("wall_time") is not None:
+                            step["wall_time"] = parse_time(jstep["wall_time"])
+                        if jstep.get("group_id") is not None:
+                            step["group_id"] = jstep["group_id"]
+
+            if target_day is None:
+                target_day = explicit_day if explicit_day is not None else self._resolve_day(None)
+                if explicit_day is not None and needs_now:
+                    # Explicit day with wall-clock time="now": ensure account timezone is fresh.
+                    self.client.sync_timezone(force=True)
+
+            # Resolve concrete time and meal group BEFORE journaling or sending so recovery
+            # compares exact persisted values and never adopts an unrelated meal.
+            resolved_now: dtime | None = None
+            for step in planned:
+                if step["wall_time"] is None:
+                    if resolved_now is None:
+                        resolved_now = self.client.now().time().replace(microsecond=0)
+                    step["wall_time"] = resolved_now
+                if step["group_id"] is None:
+                    step["group_id"] = meal_group_for_hour(step["wall_time"].hour)
+
+            if request_id and self.state and journal_steps is None:
                 journal_steps = [
-                    {"status": "pending", "entry_id": None, "baseline_ids": []} for _ in planned
+                    {
+                        "status": "pending",
+                        "entry_id": None,
+                        "baseline_ids": [],
+                        "group_id": s["group_id"],
+                        "wall_time": s["wall_time"].isoformat(timespec="seconds"),
+                    }
+                    for s in planned
                 ]
                 self.state.save_operation(
                     request_id,
@@ -455,38 +493,100 @@ class DiaryService:
                     data={"day": target_day.isoformat(), "steps": journal_steps},
                 )
 
-        # Reconcile any previously-interrupted `sending` step before writing anything new.
-        if journal_steps is not None and any(s["status"] == "sending" for s in journal_steps):
-            diary_now = self.client.get_diary(target_day)
-            claimed = {s["entry_id"] for s in journal_steps if s.get("entry_id") is not None}
-            for idx, (step, jstep) in enumerate(zip(planned, journal_steps, strict=True)):
-                if jstep["status"] != "sending":
+            # Reconcile any previously-interrupted `sending` step before writing anything new.
+            if journal_steps is not None and any(s["status"] == "sending" for s in journal_steps):
+                diary_now = self.client.get_diary(target_day)
+                claimed = {s["entry_id"] for s in journal_steps if s.get("entry_id") is not None}
+                for idx, (step, jstep) in enumerate(zip(planned, journal_steps, strict=True)):
+                    if jstep["status"] != "sending":
+                        continue
+                    baseline = set(jstep.get("baseline_ids") or [])
+                    raw_food = foods_by_id[step["food_id"]]
+                    candidates: list[int] = []
+                    nearby: list[dict[str, Any]] = []
+                    for row in diary_now.get("diary", []):
+                        if not isinstance(row, dict) or row.get("type") != "Serving":
+                            continue
+                        sid = row.get("servingId")
+                        if sid in baseline or sid in claimed:
+                            continue
+                        check = self._verify_serving_row(
+                            row,
+                            raw_food,
+                            expected_food_id=step["food_id"],
+                            expected_grams=step["grams"],
+                            expected_measure_id=step["measure_id"],
+                            expected_group_id=step["group_id"],
+                            expected_time=step["wall_time"],
+                        )
+                        if check["verified"]:
+                            candidates.append(sid)
+                        elif check["food_id"] == step["food_id"] and (
+                            check["grams"] is not None
+                            and math.isclose(
+                                check["grams"], step["grams"], rel_tol=1e-3, abs_tol=0.05
+                            )
+                        ):
+                            nearby.append(
+                                {
+                                    "entry_id": sid,
+                                    "grams": check["grams"],
+                                    "meal_group": check["meal_group"],
+                                    "time": check["time"],
+                                }
+                            )
+                    if len(candidates) == 1:
+                        jstep["entry_id"] = candidates[0]
+                        jstep["status"] = "confirmed"
+                        claimed.add(candidates[0])
+                        assert request_id and self.state
+                        self.state.save_operation(
+                            request_id,
+                            "log_food_entries",
+                            fingerprint=fingerprint,
+                            status="in_progress",
+                            data={"day": target_day.isoformat(), "steps": journal_steps},
+                        )
+                    else:
+                        nearby_note = (
+                            f" Unclaimed entries with the same food/weight at a different time or "
+                            f"meal group were not adopted: {nearby}."
+                            if nearby
+                            else ""
+                        )
+                        raise CronometerError(
+                            f"Previous attempt for item {idx} ({step['food_name']!r}) has an "
+                            f"uncertain outcome ({len(candidates)} exact matching entries found). "
+                            f"Check get_food_log for {target_day.isoformat()} before retrying."
+                            f"{nearby_note}"
+                        )
+
+            # Capture baseline serving IDs once if we are tracking durable idempotency
+            known_ids: set[int] = set()
+            if journal_steps is not None and any(s["status"] == "pending" for s in journal_steps):
+                before = self.client.get_diary(target_day)
+                known_ids = {
+                    e["servingId"]
+                    for e in before.get("diary", [])
+                    if isinstance(e, dict)
+                    and e.get("type") == "Serving"
+                    and isinstance(e.get("servingId"), int)
+                }
+
+            added_ids: list[int] = []
+            for idx, step in enumerate(planned):
+                jstep = journal_steps[idx] if journal_steps is not None else None
+                if jstep is not None and jstep["status"] == "confirmed" and jstep.get("entry_id"):
+                    step["entry_id"] = jstep["entry_id"]
+                    added_ids.append(jstep["entry_id"])
+                    known_ids.add(jstep["entry_id"])
                     continue
-                baseline = set(jstep.get("baseline_ids") or [])
-                raw_food = foods_by_id[step["food_id"]]
-                candidates = []
-                for row in diary_now.get("diary", []):
-                    if not isinstance(row, dict) or row.get("type") != "Serving":
-                        continue
-                    sid = row.get("servingId")
-                    if sid in baseline or sid in claimed:
-                        continue
-                    check = self._verify_serving_row(
-                        row,
-                        raw_food,
-                        expected_food_id=step["food_id"],
-                        expected_grams=step["grams"],
-                        expected_measure_id=step["measure_id"],
-                        expected_group_id=step["group_id"],
-                        expected_time=step["wall_time"],
-                    )
-                    if check["verified"]:
-                        candidates.append(sid)
-                if len(candidates) == 1:
-                    jstep["entry_id"] = candidates[0]
-                    jstep["status"] = "confirmed"
-                    claimed.add(candidates[0])
-                    assert request_id and self.state
+
+                if jstep is not None and request_id and self.state:
+                    jstep["status"] = "sending"
+                    jstep["baseline_ids"] = sorted(known_ids)
+                    jstep["group_id"] = step["group_id"]
+                    jstep["wall_time"] = step["wall_time"].isoformat(timespec="seconds")
                     self.state.save_operation(
                         request_id,
                         "log_food_entries",
@@ -494,136 +594,98 @@ class DiaryService:
                         status="in_progress",
                         data={"day": target_day.isoformat(), "steps": journal_steps},
                     )
-                else:
+
+                res = self._add_serving_row(
+                    food_id=step["food_id"],
+                    measure_id=step["measure_id"],
+                    grams=step["grams"],
+                    translation_id=step["translation_id"],
+                    target_day=target_day,
+                    group_id=step["group_id"],
+                    wall_time=step["wall_time"],
+                )
+                sid = res.get("id")
+                if type(sid) is not int or sid <= 0:
                     raise CronometerError(
-                        f"Previous attempt for item {idx} ({step['food_name']!r}) has an uncertain "
-                        f"outcome ({len(candidates)} matching entries found). Check get_food_log "
-                        f"for {target_day.isoformat()} before retrying."
+                        f"Cronometer did not return a valid serving ID for {step['food_name']!r}"
+                    )
+                step["entry_id"] = sid
+                added_ids.append(sid)
+                known_ids.add(sid)
+
+                if jstep is not None and request_id and self.state:
+                    jstep["entry_id"] = sid
+                    jstep["status"] = "confirmed"
+                    self.state.save_operation(
+                        request_id,
+                        "log_food_entries",
+                        fingerprint=fingerprint,
+                        status="in_progress",
+                        data={"day": target_day.isoformat(), "steps": journal_steps},
                     )
 
-        # Capture baseline serving IDs once if we are tracking durable idempotency
-        known_ids: set[int] = set()
-        if journal_steps is not None and any(s["status"] == "pending" for s in journal_steps):
-            before = self.client.get_diary(target_day)
-            known_ids = {
-                e["servingId"]
-                for e in before.get("diary", [])
-                if isinstance(e, dict)
-                and e.get("type") == "Serving"
-                and isinstance(e.get("servingId"), int)
+            diary_after = self.client.get_diary(target_day)
+            by_sid = {
+                e.get("servingId"): e
+                for e in diary_after.get("diary", [])
+                if isinstance(e, dict) and e.get("type") == "Serving"
             }
-
-        added_ids: list[int] = []
-        for idx, step in enumerate(planned):
-            jstep = journal_steps[idx] if journal_steps is not None else None
-            if jstep is not None and jstep["status"] == "confirmed" and jstep.get("entry_id"):
-                step["entry_id"] = jstep["entry_id"]
-                added_ids.append(jstep["entry_id"])
-                known_ids.add(jstep["entry_id"])
-                continue
-
-            if jstep is not None and request_id and self.state:
-                jstep["status"] = "sending"
-                jstep["baseline_ids"] = sorted(known_ids)
-                self.state.save_operation(
-                    request_id,
-                    "log_food_entries",
-                    fingerprint=fingerprint,
-                    status="in_progress",
-                    data={"day": target_day.isoformat(), "steps": journal_steps},
-                )
-
-            res = self._add_serving_row(
-                food_id=step["food_id"],
-                measure_id=step["measure_id"],
-                grams=step["grams"],
-                translation_id=step["translation_id"],
-                target_day=target_day,
-                group_id=step["group_id"],
-                wall_time=step["wall_time"],
-            )
-            sid = res.get("id")
-            if type(sid) is not int or sid <= 0:
+            missing = [sid for sid in added_ids if sid not in by_sid]
+            if missing:
                 raise CronometerError(
-                    f"Cronometer did not return a valid serving ID for {step['food_name']!r}"
-                )
-            step["entry_id"] = sid
-            added_ids.append(sid)
-            known_ids.add(sid)
-
-            if jstep is not None and request_id and self.state:
-                jstep["entry_id"] = sid
-                jstep["status"] = "confirmed"
-                self.state.save_operation(
-                    request_id,
-                    "log_food_entries",
-                    fingerprint=fingerprint,
-                    status="in_progress",
-                    data={"day": target_day.isoformat(), "steps": journal_steps},
+                    f"Read-back verification failed: serving IDs {missing} not found on {target_day.isoformat()}"
                 )
 
-        diary_after = self.client.get_diary(target_day)
-        by_sid = {
-            e.get("servingId"): e
-            for e in diary_after.get("diary", [])
-            if isinstance(e, dict) and e.get("type") == "Serving"
-        }
-        missing = [sid for sid in added_ids if sid not in by_sid]
-        if missing:
-            raise CronometerError(
-                f"Read-back verification failed: serving IDs {missing} not found on {target_day.isoformat()}"
-            )
-
-        logged_out = []
-        all_verified = True
-        all_mismatches: list[dict[str, Any]] = []
-        for idx, step in enumerate(planned):
-            row = by_sid[step["entry_id"]]
-            raw_food = foods_by_id[step["food_id"]]
-            check = self._verify_serving_row(
-                row,
-                raw_food,
-                expected_food_id=step["food_id"],
-                expected_grams=step["grams"],
-                expected_measure_id=step["measure_id"],
-                expected_group_id=step["group_id"],
-                expected_time=step["wall_time"],
-            )
-            if not check["verified"]:
-                all_verified = False
-                all_mismatches.append(
-                    {"index": idx, "entry_id": step["entry_id"], "issues": check["mismatches"]}
+            logged_out = []
+            all_verified = True
+            all_mismatches: list[dict[str, Any]] = []
+            for idx, step in enumerate(planned):
+                row = by_sid[step["entry_id"]]
+                raw_food = foods_by_id[step["food_id"]]
+                check = self._verify_serving_row(
+                    row,
+                    raw_food,
+                    expected_food_id=step["food_id"],
+                    expected_grams=step["grams"],
+                    expected_measure_id=step["measure_id"],
+                    expected_group_id=step["group_id"],
+                    expected_time=step["wall_time"],
                 )
-            item_out: dict[str, Any] = {
-                "entry_id": step["entry_id"],
-                "food_id": check["food_id"],
-                "food_name": step["food_name"],
-                "grams": check["grams"],
-                "measure_id": check["measure_id"],
-                "measure_name": step["measure_name"],
-                "meal_group": check["meal_group"],
-                "time": check["time"],
-                "verified": check["verified"],
+                if not check["verified"]:
+                    all_verified = False
+                    all_mismatches.append(
+                        {"index": idx, "entry_id": step["entry_id"], "issues": check["mismatches"]}
+                    )
+                item_out: dict[str, Any] = {
+                    "entry_id": step["entry_id"],
+                    "food_id": check["food_id"],
+                    "food_name": step["food_name"],
+                    "grams": check["grams"],
+                    "measure_id": check["measure_id"],
+                    "measure_name": step["measure_name"],
+                    "meal_group": check["meal_group"],
+                    "time": check["time"],
+                    "verified": check["verified"],
+                }
+                if check["mismatches"]:
+                    item_out["verification_mismatches"] = check["mismatches"]
+                logged_out.append(item_out)
+
+            response: dict[str, Any] = {
+                "date": target_day.isoformat(),
+                "logged_count": len(logged_out),
+                "logged": logged_out,
+                "verified": all_verified,
+                "already_logged": False,
+                "energy_summary": extract_energy_summary(diary_after),
             }
-            if check["mismatches"]:
-                item_out["verification_mismatches"] = check["mismatches"]
-            logged_out.append(item_out)
-
-        response: dict[str, Any] = {
-            "date": target_day.isoformat(),
-            "logged_count": len(logged_out),
-            "logged": logged_out,
-            "verified": all_verified,
-            "already_logged": False,
-            "energy_summary": extract_energy_summary(diary_after),
-        }
-        if all_mismatches:
-            response["verification_mismatches"] = all_mismatches
-        if request_id and self.state and all_verified:
-            self.state.save_idempotent(
-                request_id, "log_food_entries", response, fingerprint=fingerprint
-            )
-        return response
+            if all_mismatches:
+                response["verification_mismatches"] = all_mismatches
+            if request_id and self.state and all_verified:
+                self.state.save_idempotent(
+                    request_id, "log_food_entries", response, fingerprint=fingerprint
+                )
+            return response
 
     def edit_food_entry(
         self,
@@ -649,90 +711,95 @@ class DiaryService:
                 "Provide at least one field to change (grams, quantity, measure_id, time, meal_group, or new_day)"
             )
 
-        source_day = self._resolve_day(day)
-        serving = self.client.find_entry(entry_id, "Serving", source_day)
-        updated = deepcopy(serving)
-        raw_food = self.client.get_food(int(serving["foodId"]))
-        _, _, _, existing_actual_grams = serving_scale_and_display(raw_food, serving)
-        expected_grams: float = (
-            existing_actual_grams if existing_actual_grams is not None else float(serving["grams"])
-        )
-        expected_measure_id: int | None = serving.get("measureId")
-        expected_group_id: int | None = (serving.get("order") or 0) >> 16
-        expected_time: dtime | None = None
-
-        if (
-            grams is not None
-            or quantity is not None
-            or measure_id is not None
-            or measure_name is not None
-        ):
-            units = self.client._recipe_entry_units(int(serving["foodId"]))
-            effective_grams = grams
-            effective_qty = quantity
-            if effective_grams is None and effective_qty is None:
-                if units is not None:
-                    raise ValidationError(
-                        "Provide `grams` or `quantity` when updating a recipe serving"
-                    )
-                effective_grams = float(serving["grams"])
-            resolved = resolve_serving_amount(
-                raw_food,
-                grams=effective_grams,
-                quantity=effective_qty,
-                measure_id=measure_id,
-                measure_name=measure_name,
+        with self._op_lock():
+            source_day = self._resolve_day(day)
+            serving = self.client.find_entry(entry_id, "Serving", source_day)
+            updated = deepcopy(serving)
+            raw_food = self.client.get_food(int(serving["foodId"]))
+            _, _, _, existing_actual_grams = serving_scale_and_display(raw_food, serving)
+            expected_grams: float = (
+                existing_actual_grams
+                if existing_actual_grams is not None
+                else float(serving["grams"])
             )
-            expected_grams = resolved["grams"]
-            wire_measure_id = resolved["measure_id"]
-            wire_grams = resolved["grams"]
-            if units is not None:
-                wire_measure_id, grams_per_unit = units
-                wire_grams = wire_grams / grams_per_unit
-            expected_measure_id = wire_measure_id
-            updated["measureId"] = wire_measure_id
-            updated["grams"] = wire_grams
+            expected_measure_id: int | None = serving.get("measureId")
+            expected_group_id: int | None = (serving.get("order") or 0) >> 16
+            expected_time: dtime | None = None
 
-        if time is not None:
-            expected_time = parse_time(time)
-            assert expected_time is not None
-            updated["time"] = format_api_time(expected_time)
+            if (
+                grams is not None
+                or quantity is not None
+                or measure_id is not None
+                or measure_name is not None
+            ):
+                units = self.client._recipe_entry_units(int(serving["foodId"]))
+                effective_grams = grams
+                effective_qty = quantity
+                if effective_grams is None and effective_qty is None:
+                    if units is not None:
+                        raise ValidationError(
+                            "Provide `grams` or `quantity` when updating a recipe serving"
+                        )
+                    effective_grams = float(serving["grams"])
+                resolved = resolve_serving_amount(
+                    raw_food,
+                    grams=effective_grams,
+                    quantity=effective_qty,
+                    measure_id=measure_id,
+                    measure_name=measure_name,
+                )
+                expected_grams = resolved["grams"]
+                wire_measure_id = resolved["measure_id"]
+                wire_grams = resolved["grams"]
+                if units is not None:
+                    wire_measure_id, grams_per_unit = units
+                    wire_grams = wire_grams / grams_per_unit
+                expected_measure_id = wire_measure_id
+                updated["measureId"] = wire_measure_id
+                updated["grams"] = wire_grams
 
-        if meal_group is not None:
-            expected_group_id = parse_meal_group(meal_group, allow_auto=False)
-            assert expected_group_id is not None
-            updated["order"] = (expected_group_id << 16) | ((updated.get("order") or 1) & 0xFFFF)
+            if time is not None:
+                expected_time = parse_time(time)
+                assert expected_time is not None
+                updated["time"] = format_api_time(expected_time)
 
-        dest_day = source_day
-        if new_day is not None:
-            dest_day = parse_day(new_day)  # type: ignore[assignment]
-            updated["day"] = self.client._format_day(dest_day)
+            if meal_group is not None:
+                expected_group_id = parse_meal_group(meal_group, allow_auto=False)
+                assert expected_group_id is not None
+                updated["order"] = (expected_group_id << 16) | (
+                    (updated.get("order") or 1) & 0xFFFF
+                )
 
-        self.client._request("/api/v2/edit_serving", {"serving": updated})
+            dest_day = source_day
+            if new_day is not None:
+                dest_day = parse_day(new_day)  # type: ignore[assignment]
+                updated["day"] = self.client._format_day(dest_day)
 
-        fresh = self.client.find_entry(entry_id, "Serving", dest_day)
-        check = self._verify_serving_row(
-            fresh,
-            raw_food,
-            expected_food_id=int(serving["foodId"]),
-            expected_grams=expected_grams,
-            expected_measure_id=expected_measure_id,
-            expected_group_id=expected_group_id,
-            expected_time=expected_time,
-        )
-        result: dict[str, Any] = {
-            "entry_id": entry_id,
-            "food_id": check["food_id"],
-            "date": dest_day.isoformat(),
-            "grams": check["grams"],
-            "measure_id": check["measure_id"],
-            "time": check["time"],
-            "meal_group": check["meal_group"],
-            "verified": check["verified"],
-        }
-        if check["mismatches"]:
-            result["verification_mismatches"] = check["mismatches"]
-        return result
+            self.client._request("/api/v2/edit_serving", {"serving": updated})
+
+            fresh = self.client.find_entry(entry_id, "Serving", dest_day)
+            check = self._verify_serving_row(
+                fresh,
+                raw_food,
+                expected_food_id=int(serving["foodId"]),
+                expected_grams=expected_grams,
+                expected_measure_id=expected_measure_id,
+                expected_group_id=expected_group_id,
+                expected_time=expected_time,
+            )
+            result: dict[str, Any] = {
+                "entry_id": entry_id,
+                "food_id": check["food_id"],
+                "date": dest_day.isoformat(),
+                "grams": check["grams"],
+                "measure_id": check["measure_id"],
+                "time": check["time"],
+                "meal_group": check["meal_group"],
+                "verified": check["verified"],
+            }
+            if check["mismatches"]:
+                result["verification_mismatches"] = check["mismatches"]
+            return result
 
     def remove_food_entries(
         self, entry_ids: list[int | str], *, day: str | None = None

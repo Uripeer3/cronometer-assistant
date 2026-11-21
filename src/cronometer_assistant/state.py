@@ -6,6 +6,7 @@ import fcntl
 import json
 import os
 import sqlite3
+import threading
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -23,6 +24,8 @@ class AssistantState:
     def __init__(self, path: Path, user_id: int) -> None:
         self.path = Path(path).resolve()
         self.user_id = user_id
+        self._thread_lock = threading.RLock()
+        self._op_thread_lock = threading.RLock()
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
         os.close(fd)
@@ -32,13 +35,27 @@ class AssistantState:
     @contextmanager
     def _locked(self):
         lock_path = str(self.path) + ".lock"
-        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
-            yield
-        finally:
-            fcntl.flock(fd, fcntl.LOCK_UN)
-            os.close(fd)
+        with self._thread_lock:
+            fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+                yield
+            finally:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+                os.close(fd)
+
+    @contextmanager
+    def operation_lock(self):
+        """Process- and thread-safe exclusive lock across multi-step write/reconcile/edit flows."""
+        lock_path = str(self.path) + ".op.lock"
+        with self._op_thread_lock:
+            fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+                yield
+            finally:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+                os.close(fd)
 
     @contextmanager
     def _conn(self):

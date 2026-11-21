@@ -74,6 +74,12 @@ class TargetsService:
                 f"Unknown nutrient {raw!r}. Call list_nutrients to see valid keys."
             )
         previous = self.client.find_target(entry["id"])
+        eff_min = minimum if minimum is not None else (previous.get("min") if previous else None)
+        eff_max = maximum if maximum is not None else (previous.get("max") if previous else None)
+        if eff_min is not None and eff_max is not None and float(eff_min) > float(eff_max):
+            raise ValidationError(
+                f"Resulting target range is invalid: minimum ({eff_min}) exceeds maximum ({eff_max})"
+            )
         result = self.client.set_target(slug, minimum=minimum, maximum=maximum, visible=visible)
         return {**result, "previous": previous}
 

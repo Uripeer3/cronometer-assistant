@@ -43,6 +43,8 @@ class FakeCronometerBackend:
             324: {"id": 324, "min": 600.0, "custom": False, "vis": True},
         }
         self.tamper_serving_grams: float | None = None
+        self.ignore_nutrient_updates: bool = False
+        self.diary_read_delay: float = 0.0
         self.fasts: list[dict[str, Any]] = []
         self.foods: dict[int, dict[str, Any]] = {
             460334: {
@@ -251,6 +253,7 @@ class FakeCronometerBackend:
         if path == "/api/v2/add_food":
             data = dict(body["data"])
             fid = data.get("id") or 0
+            existing = self.foods.get(fid) if fid else None
             if fid == 0:
                 fid = self.next_food_id
                 self.next_food_id += 1
@@ -264,13 +267,45 @@ class FakeCronometerBackend:
                     m_copy["id"] = self.next_measure_id
                     self.next_measure_id += 1
                 measures.append(m_copy)
+            if data.get("meal") and not any(m.get("name") == "full recipe" for m in measures):
+                mid = self.next_measure_id
+                self.next_measure_id += 1
+                measures.insert(
+                    0,
+                    {
+                        "id": mid,
+                        "name": "full recipe",
+                        "type": "Recipe",
+                        "amount": 1.0,
+                        "value": 1.0,
+                    },
+                )
             data["measures"] = measures
             if not data.get("defaultMeasureId") and measures:
                 data["defaultMeasureId"] = measures[-1]["id"]
+            if self.ignore_nutrient_updates and existing is not None:
+                data["nutrients"] = list(existing.get("nutrients", []))
+            elif data.get("meal") and data.get("ingredients"):
+                # Native recipes store full-batch nutrients computed from ingredients
+                totals: dict[int, float] = {}
+                for ing in data["ingredients"]:
+                    ing_food = self.foods.get(ing["foodId"], {})
+                    ing_g = float(ing.get("grams") or 0)
+                    for n in ing_food.get("nutrients", []):
+                        nid, amt = n.get("id"), n.get("amount")
+                        if isinstance(nid, int) and isinstance(amt, (int, float)):
+                            totals[nid] = totals.get(nid, 0.0) + float(amt) * ing_g / 100.0
+                data["nutrients"] = [
+                    {"id": nid, "amount": round(val, 4)} for nid, val in sorted(totals.items())
+                ]
             self.foods[fid] = data
             return httpx.Response(200, json={"result": "SUCCESS", "id": fid})
 
         if path == "/api/v2/get_diary":
+            if self.diary_read_delay > 0:
+                import time
+
+                time.sleep(self.diary_read_delay)
             day_key = body["day"]
             entries = list(self.diary.get(day_key, []))
             consumed_kcal = 0.0
@@ -800,6 +835,330 @@ class ServiceAndMCPTests(unittest.TestCase):
         # Explicit historical date remains untouched
         hist = self.assistant.diary.get_food_log("2026-11-15")
         self.assertEqual(hist["date"], "2026-11-15")
+
+    def test_concurrent_identical_meal_retries_do_not_duplicate(self):
+        from concurrent.futures import ThreadPoolExecutor
+
+        self.backend.diary_read_delay = 0.04
+        items = [
+            {"food_id": 460334, "grams": 150},
+            {"food_id": 72014363, "grams": 30},
+        ]
+
+        def submit():
+            return self.assistant.diary.log_food_entries(
+                items,
+                day="2026-11-21",
+                meal_group="lunch",
+                time="13:00",
+                request_id="race-meal-1",
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            f1 = pool.submit(submit)
+            f2 = pool.submit(submit)
+            r1, r2 = f1.result(), f2.result()
+
+        self.assertEqual({r1["already_logged"], r2["already_logged"]}, {False, True})
+        self.assertEqual(r1["logged_count"], 2)
+        self.assertEqual(r2["logged_count"], 2)
+        log = self.assistant.diary.get_food_log("2026-11-21")
+        self.assertEqual(log["serving_count"], 2)
+
+    def test_recovery_does_not_adopt_unrelated_meal_at_different_time_or_group(self):
+        from cronometer_mcp.client import CronometerError
+
+        orig_add = self.assistant.diary._add_serving_row
+
+        def fail_before_write(**kwargs):
+            raise httpx.ReadTimeout("timeout before server wrote")
+
+        # Simulate a timeout BEFORE rice was written with time/group omitted (defaults to now/auto)
+        self.assistant.diary._add_serving_row = fail_before_write  # type: ignore[method-assign]
+        with self.assertRaises(httpx.ReadTimeout):
+            self.assistant.diary.log_food_entries(
+                [{"food_id": 460334, "grams": 150}],
+                day="2026-11-21",
+                request_id="orphan-rice-1",
+            )
+        self.assistant.diary._add_serving_row = orig_add  # type: ignore[method-assign]
+
+        # Separately log the exact same food and weight at 23:59 for dinner
+        dinner = self.assistant.diary.log_food_entries(
+            [{"food_id": 460334, "grams": 150}],
+            day="2026-11-21",
+            meal_group="dinner",
+            time="23:59",
+            request_id="separate-dinner-1",
+        )
+        self.assertTrue(dinner["verified"])
+
+        # Retrying the original request must NOT claim the 23:59 dinner entry
+        with self.assertRaises(CronometerError) as ctx:
+            self.assistant.diary.log_food_entries(
+                [{"food_id": 460334, "grams": 150}],
+                day="2026-11-21",
+                request_id="orphan-rice-1",
+            )
+        self.assertIn("not adopted", str(ctx.exception))
+
+    def test_retry_after_midnight_recovers_original_day_without_rejecting_key(self):
+        from datetime import date, datetime
+        from zoneinfo import ZoneInfo
+
+        tz = ZoneInfo("Asia/Jerusalem")
+        current_now = [datetime(2026, 11, 21, 23, 59, 0, tzinfo=tz)]
+        self.client.now = lambda: current_now[0]  # type: ignore[method-assign]
+        self.client.today = lambda: current_now[0].date()  # type: ignore[method-assign]
+
+        orig_add = self.assistant.diary._add_serving_row
+        calls = 0
+
+        def fail_second_after_write(**kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                orig_add(**kwargs)
+                raise httpx.ReadTimeout("timeout after item 2 wrote")
+            return orig_add(**kwargs)
+
+        items = [
+            {"food_id": 460334, "grams": 150},
+            {"food_id": 72014363, "grams": 30},
+        ]
+        self.assistant.diary._add_serving_row = fail_second_after_write  # type: ignore[method-assign]
+        with self.assertRaises(httpx.ReadTimeout):
+            self.assistant.diary.log_food_entries(items, request_id="midnight-meal-1")
+        self.assistant.diary._add_serving_row = orig_add  # type: ignore[method-assign]
+
+        # Clock crosses midnight to 2026-11-22; retrying with day omitted recovers 2026-11-21!
+        current_now[0] = datetime(2026, 11, 22, 0, 2, 0, tzinfo=tz)
+        resumed = self.assistant.diary.log_food_entries(items, request_id="midnight-meal-1")
+        self.assertTrue(resumed["verified"])
+        self.assertEqual(resumed["date"], date(2026, 11, 21).isoformat())
+        self.assertEqual(self.assistant.diary.get_food_log("2026-11-21")["serving_count"], 2)
+        self.assertEqual(self.assistant.diary.get_food_log("2026-11-22")["serving_count"], 0)
+
+    def test_concurrent_edits_to_same_entry_do_not_clobber_each_other(self):
+        from concurrent.futures import ThreadPoolExecutor
+
+        logged = self.assistant.diary.log_food_entries(
+            [{"food_id": 460334, "grams": 100}],
+            day="2026-11-21",
+            meal_group="lunch",
+            time="12:00",
+        )
+        sid = logged["logged"][0]["entry_id"]
+        self.backend.diary_read_delay = 0.04
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            f_grams = pool.submit(
+                self.assistant.diary.edit_food_entry, sid, day="2026-11-21", grams=200
+            )
+            f_time = pool.submit(
+                self.assistant.diary.edit_food_entry, sid, day="2026-11-21", time="19:30"
+            )
+            r_g, r_t = f_grams.result(), f_time.result()
+
+        self.assertTrue(r_g["verified"] and r_t["verified"])
+        log = self.assistant.diary.get_food_log("2026-11-21")
+        self.assertEqual(log["serving_count"], 1)
+        row = log["servings"][0]
+        self.assertAlmostEqual(row["grams"], 200.0, places=2)
+        self.assertEqual(row["time"], "19:30:0")
+
+    def test_custom_food_default_portion_reserved_g_and_update_verification(self):
+        # Real Cronometer assigns defaultMeasureId to the 1 g `g` measure on Weight custom foods.
+        # Creating a 42 g cereal must still log 42 g for quantity=1 and 50 g for grams=50!
+        created = self.assistant.custom.create_custom_food(
+            "ProFlex Cereal 42g",
+            {"energy": 160, "protein": 12, "carbs": 20, "fat": 3},
+            basis_amount=42,
+            carbohydrate_basis="includes_fiber",
+            serving_name="serving",
+            serving_grams=42,
+            request_id="cereal-42g-1",
+        )
+        self.assertTrue(created["verified"], created)
+        fid = created["food_id"]
+        # Confirm backend set defaultMeasureId to `g` (just like real Cronometer)
+        def_m = next(m for m in created["measures"] if m["is_default"])
+        self.assertEqual(def_m["name"], "g")
+        srv_m = created["primary_measure"]
+        self.assertEqual(srv_m["name"], "serving")
+        self.assertAlmostEqual(srv_m["grams_per_unit"], 42.0, places=3)
+
+        # Release gate: quantity=1 logs 42 g (NOT 1 g!), grams=50 logs 50 g, quantity=50 g logs 50 g
+        logged = self.assistant.diary.log_food_entries(
+            [
+                {"food_id": fid, "quantity": 1},
+                {"food_id": fid, "grams": 50},
+                {"food_id": fid, "quantity": 50, "measure_name": "g"},
+            ],
+            day="2026-11-21",
+            meal_group="breakfast",
+            time="08:00",
+        )
+        self.assertTrue(logged["verified"])
+        self.assertAlmostEqual(logged["logged"][0]["grams"], 42.0, places=2)
+        self.assertAlmostEqual(logged["logged"][1]["grams"], 50.0, places=2)
+        self.assertAlmostEqual(logged["logged"][2]["grams"], 50.0, places=2)
+
+        # Naming a non-1g serving "g" must be rejected on both create and update
+        with self.assertRaises(ValidationError):
+            self.assistant.custom.create_custom_food(
+                "Bad Cereal",
+                {"energy": 160, "protein": 12},
+                basis_amount=42,
+                serving_name="g",
+                serving_grams=42,
+            )
+        with self.assertRaises(ValidationError):
+            self.assistant.custom.update_custom_food(
+                fid, measures=[{"measure_id": srv_m["measure_id"], "name": "g"}]
+            )
+
+        # If backend silently drops a protein correction on update, verified must be False
+        self.backend.ignore_nutrient_updates = True
+        bad_upd = self.assistant.custom.update_custom_food(
+            fid, nutrients={"protein": 18}, basis_amount=42
+        )
+        self.assertFalse(bad_upd["verified"])
+        self.assertIn("verification_mismatches", bad_upd)
+
+    def test_native_recipe_per_100g_consistent_across_details_search_nested_and_history(self):
+        # 400 g native (meal=True) rice recipe carrying 520 kcal total batch -> 130 kcal / 100 g
+        self.backend.foods[9801] = {
+            "id": 9801,
+            "name": "Native Batch Rice",
+            "source": "Custom",
+            "category": 12,
+            "owner": 1001,
+            "retired": False,
+            "meal": True,
+            "labelType": "AMERICAN_2016",
+            "defaultMeasureId": 98011,
+            "barcodes": [],
+            "measures": [
+                {"id": 98010, "name": "full recipe", "type": "Recipe", "amount": 1.0, "value": 1.0},
+                {"id": 98011, "name": "serving", "type": "Recipe", "amount": 1.0, "value": 2.0},
+                {"id": 98012, "name": "g", "type": "Recipe", "amount": 1.0, "value": 400.0},
+            ],
+            "ingredients": [
+                {"foodId": 460334, "measureId": 1048861, "grams": 400.0, "amount": 1.0}
+            ],
+            "nutrients": [
+                {"id": 208, "amount": 520.0},
+                {"id": 203, "amount": 10.8},
+                {"id": 205, "amount": 112.0},
+                {"id": 204, "amount": 1.2},
+            ],
+        }
+
+        # 1) Details reports 130 kcal/100g (not 520)
+        details = self.assistant.foods.get_food_details(9801)
+        self.assertAlmostEqual(details["macros_per_100g"]["energy_kcal"], 130.0, places=2)
+        energy_row = next(n for n in details["nutrients_per_100g"] if n["id"] == 208)
+        self.assertAlmostEqual(energy_row["amount"], 130.0, places=2)
+
+        # 2) Search reports 130 kcal/100g (not 520)
+        search = self.assistant.foods.search_foods("Native Batch Rice")
+        self.assertEqual(search["count"], 1)
+        self.assertAlmostEqual(
+            search["foods"][0]["macros_per_100g"]["energy_kcal"], 130.0, places=2
+        )
+
+        # 3) Nesting 100 g of this native recipe in a weight recipe contributes 130 kcal (not 520)
+        nested = self.assistant.custom.save_recipe(
+            "Rice Bowl Wrapper",
+            [{"food_id": 9801, "grams": 100}],
+            servings=1,
+        )
+        self.assertTrue(nested["verified"])
+        self.assertAlmostEqual(nested["macros_per_100g"]["energy_kcal"], 130.0, places=2)
+
+        # 4) Logging 200 g and querying food history reports 200.0 g (not 0.5 batch fraction)
+        self.assistant.diary.log_food_entries(
+            [{"food_id": 9801, "grams": 200}], day="2026-11-21", meal_group="lunch", time="13:00"
+        )
+        hist = self.assistant.diary_extras.find_entries_by_food(
+            9801, start_day="2026-11-21", end_day="2026-11-21"
+        )
+        self.assertAlmostEqual(hist["entries"][0]["grams"], 200.0, places=2)
+
+    def test_recipe_edit_preserves_cooked_weight_and_servings_recipe_measure_ids(self):
+        # Release gate A: 400 g raw / 250 g cooked weight recipe, 2 servings (125 g each)
+        w_recipe = self.assistant.custom.save_recipe(
+            "Cooked Rice Pot",
+            [{"food_id": 460334, "grams": 400}],
+            servings=2,
+            cooked_grams=250,
+            notes="Lightly salted",
+        )
+        self.assertTrue(w_recipe["verified"])
+        self.assertEqual(w_recipe["final_grams"], 250.0)
+        w_orig_mids = {m["name"]: m["measure_id"] for m in w_recipe["measures"]}
+
+        # Log 1 portion (125 g)
+        w_log = self.assistant.diary.log_food_entries(
+            [{"food_id": w_recipe["food_id"], "quantity": 1, "measure_name": "serving"}],
+            day="2026-11-20",
+            meal_group="dinner",
+            time="19:00",
+        )
+        self.assertAlmostEqual(w_log["logged"][0]["grams"], 125.0, places=2)
+
+        # Change servings from 2 -> 4 while OMITTING cooked_grams and notes
+        w_edited = self.assistant.custom.save_recipe(
+            "Cooked Rice Pot",
+            [{"food_id": 460334, "grams": 400}],
+            servings=4,
+            recipe_id=w_recipe["food_id"],
+        )
+        self.assertTrue(w_edited["verified"], w_edited)
+        self.assertEqual(w_edited["final_grams"], 250.0)
+        self.assertAlmostEqual(w_edited["servings"], 4.0, places=2)
+        srv_m = next(m for m in w_edited["measures"] if m["name"] == "serving")
+        self.assertAlmostEqual(srv_m["grams_per_unit"], 62.5, places=2)
+        # Measure IDs and user notes preserved; historical diary entry still reads cleanly
+        self.assertEqual({m["name"]: m["measure_id"] for m in w_edited["measures"]}, w_orig_mids)
+        self.assertIn("Lightly salted", self.backend.foods[w_recipe["food_id"]]["comments"])
+        hist_w = self.assistant.diary.get_food_log("2026-11-20")
+        self.assertAlmostEqual(hist_w["servings"][0]["grams"], 125.0, places=2)
+        self.assertIsNotNone(hist_w["servings"][0]["measure"])
+
+        # Release gate B: servings-based (meal=True) recipe edit preserves measure IDs
+        s_recipe = self.assistant.custom.save_recipe(
+            "Native Rice Servings",
+            [{"food_id": 460334, "grams": 400}],
+            servings=2,
+            serving_type="servings",
+        )
+        self.assertTrue(s_recipe["verified"])
+        self.assertAlmostEqual(s_recipe["macros_per_100g"]["energy_kcal"], 130.0, places=2)
+        s_orig_mids = {m["name"]: m["measure_id"] for m in s_recipe["measures"]}
+
+        s_log = self.assistant.diary.log_food_entries(
+            [{"food_id": s_recipe["food_id"], "quantity": 1, "measure_name": "serving"}],
+            day="2026-11-19",
+            meal_group="lunch",
+            time="13:00",
+        )
+        self.assertAlmostEqual(s_log["logged"][0]["grams"], 200.0, places=2)
+
+        s_edited = self.assistant.custom.save_recipe(
+            "Native Rice Servings",
+            [{"food_id": 460334, "grams": 400}],
+            servings=4,
+            recipe_id=s_recipe["food_id"],
+        )
+        self.assertTrue(s_edited["verified"], s_edited)
+        self.assertAlmostEqual(s_edited["servings"], 4.0, places=2)
+        self.assertEqual({m["name"]: m["measure_id"] for m in s_edited["measures"]}, s_orig_mids)
+        hist_s = self.assistant.diary.get_food_log("2026-11-19")
+        self.assertEqual(hist_s["serving_count"], 1)
+        self.assertIsNotNone(hist_s["servings"][0]["measure"])
+        self.assertIn(hist_s["servings"][0]["measure"]["measure_id"], s_orig_mids.values())
 
     def test_mcp_tool_tiers_and_gemini_claude_schema_compatibility(self):
         core_only = create_server(

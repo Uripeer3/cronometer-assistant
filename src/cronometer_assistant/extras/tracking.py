@@ -232,6 +232,16 @@ class TrackingService:
         tz = self.client._tzinfo()
         started = parse_local_datetime(start, tz) if start is not None else None
         ended = parse_local_datetime(end, tz) if end is not None else None
+        existing_fasts = self.client.get_fasting_with_date_range().get("fasts", [])
+        existing = next((f for f in existing_fasts if f.get("id") == fast_id), None)
+        if existing is None:
+            raise ValidationError(f"No fast with id {fast_id} in the recent range")
+        eff_start_ms = (
+            int(started.timestamp() * 1000) if started is not None else existing.get("start")
+        )
+        eff_end_ms = int(ended.timestamp() * 1000) if ended is not None else existing.get("end")
+        if eff_start_ms is not None and eff_end_ms is not None and eff_end_ms <= eff_start_ms:
+            raise ValidationError("Fast end must be after start")
         goal = (
             finite_number(goal_hours, "goal_hours", positive=True)
             if goal_hours is not None

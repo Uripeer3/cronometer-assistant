@@ -212,6 +212,19 @@ def extract_measures(raw_food: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
+def _is_one_gram_measure(measure: dict[str, Any]) -> bool:
+    name = str(measure.get("name", "")).strip().casefold()
+    val = measure.get("value")
+    amt = measure.get("amount") or 1.0
+    return (
+        name in {"g", "gram", "grams"}
+        and isinstance(val, (int, float))
+        and isinstance(amt, (int, float))
+        and amt > 0
+        and math.isclose(float(val) / float(amt), 1.0, rel_tol=1e-4, abs_tol=1e-6)
+    )
+
+
 def resolve_serving_amount(
     raw_food: dict[str, Any],
     *,
@@ -297,6 +310,19 @@ def resolve_serving_amount(
     if chosen is None:
         default_id = raw_food.get("defaultMeasureId")
         chosen = next((m for m in measures if m.get("id") == default_id), None)
+        # Cronometer assigns defaultMeasureId to the 1 g `g` measure on Weight custom foods
+        # even when a named serving (e.g. `serving = 42 g`) is defined. When a caller logs by
+        # `quantity` without naming a unit, prefer the food's primary serving measure over `1 g`.
+        if chosen is not None and _is_one_gram_measure(chosen):
+            non_mass = [
+                m
+                for m in measures
+                if not m.get("hidden")
+                and str(m.get("name", "")).strip().casefold()
+                not in {"g", "gram", "grams", "oz", "ounce", "ounces", "lb", "lbs", "kg"}
+            ]
+            if non_mass:
+                chosen = non_mass[0]
         if chosen is None:
             chosen = next((m for m in measures if not m.get("hidden")), None)
     if chosen is None:
@@ -304,12 +330,25 @@ def resolve_serving_amount(
 
     if is_native_recipe and chosen.get("type") == "Recipe":
         # Recipe measures store units-per-batch in `value` (e.g. 4 servings per batch).
-        # Compute total batch grams from ingredients so we can pass real grams to add_serving().
+        # Compute total batch grams from ingredients (or Recipe "g" measure) for add_serving().
         total_batch = sum(
             float(i.get("grams") or 0)
             for i in raw_food.get("ingredients", [])
             if isinstance(i, dict)
         )
+        if total_batch <= 0:
+            g_m = next(
+                (
+                    m
+                    for m in measures
+                    if m.get("type") == "Recipe"
+                    and m.get("name") == "g"
+                    and (m.get("value") or 0) > 0
+                ),
+                None,
+            )
+            if g_m is not None:
+                total_batch = float(g_m["value"])
         m_val = chosen.get("value")
         if total_batch <= 0 or not isinstance(m_val, (int, float)) or m_val <= 0:
             raise ValidationError(

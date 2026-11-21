@@ -107,7 +107,54 @@ def format_api_time(t: dtime) -> str:
     return f"{t.hour}:{t.minute}:{t.second}"
 
 
-def extract_key_macros(raw_food: dict[str, Any], scale: float = 1.0) -> dict[str, float]:
+def meal_group_for_hour(hour: int) -> int:
+    """Match CronometerClient's auto meal-group mapping (1=Breakfast, 2=Lunch, 3=Dinner, 4=Snacks)."""
+    if 4 <= hour < 10:
+        return 1
+    if 10 <= hour < 14:
+        return 2
+    if 14 <= hour < 21:
+        return 3
+    return 4
+
+
+def native_recipe_total_grams(raw_food: dict[str, Any]) -> float | None:
+    """Total batch weight in grams for a native (`meal=True`) recipe, or None for normal foods."""
+    if not raw_food.get("meal"):
+        return None
+    total = sum(
+        float(i.get("grams") or 0) for i in raw_food.get("ingredients", []) if isinstance(i, dict)
+    )
+    if total > 0:
+        return total
+    for m in raw_food.get("measures", []):
+        if isinstance(m, dict) and m.get("type") == "Recipe" and m.get("name") == "g":
+            v = m.get("value")
+            if isinstance(v, (int, float)) and math.isfinite(v) and v > 0:
+                return float(v)
+    return None
+
+
+def per_100g_nutrient_factor(raw_food: dict[str, Any]) -> float | None:
+    """Multiplier converting raw_food['nutrients'] amounts to per-100g values.
+
+    Normal foods and weight-based recipes already store nutrients per 100 g (factor = 1.0).
+    Native recipes (`meal=True`) store nutrients per full batch (factor = 100 / batch_grams).
+    """
+    if not raw_food.get("meal"):
+        return 1.0
+    total = native_recipe_total_grams(raw_food)
+    if total is None or total <= 0:
+        return None
+    return 100.0 / total
+
+
+def extract_key_macros(raw_food: dict[str, Any], scale: float | None = None) -> dict[str, float]:
+    """Extract key macros scaled by `scale` (defaults to per-100g normalization)."""
+    if scale is None:
+        scale = per_100g_nutrient_factor(raw_food)
+    if scale is None:
+        return {}
     out: dict[str, float] = {}
     for row in raw_food.get("nutrients", []):
         if not isinstance(row, dict):
@@ -164,19 +211,8 @@ def serving_scale_and_display(
             servings = round(float(grams) / gpu, 4)
 
     if raw_food.get("meal") and isinstance(grams, (int, float)):
-        total_grams = sum(
-            float(i.get("grams") or 0)
-            for i in raw_food.get("ingredients", [])
-            if isinstance(i, dict)
-        )
-        if not total_grams:
-            for m in raw_food.get("measures", []):
-                if isinstance(m, dict) and m.get("type") == "Recipe" and m.get("name") == "g":
-                    v = m.get("value")
-                    if isinstance(v, (int, float)) and v > 0:
-                        total_grams = float(v)
-                        break
-        if total_grams > 0:
+        total_grams = native_recipe_total_grams(raw_food)
+        if total_grams and total_grams > 0:
             if (
                 measure
                 and measure.get("type") == "Recipe"

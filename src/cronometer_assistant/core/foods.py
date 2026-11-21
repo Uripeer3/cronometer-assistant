@@ -6,7 +6,7 @@ from typing import Any
 
 from ..auth import CronometerSessionClient, validate_timezone
 from ..nutrition import ValidationError, clean_text, extract_measures, normalize_key
-from ..parsing import extract_key_macros, is_recipe_food
+from ..parsing import extract_key_macros, is_recipe_food, per_100g_nutrient_factor
 from ..state import AssistantState
 
 
@@ -69,7 +69,7 @@ class FoodService:
                     "is_recipe": is_recipe_food(detail),
                     "barcodes": detail.get("barcodes") or [],
                     "measures": extract_measures(detail),
-                    "macros_per_100g": extract_key_macros(detail, 1.0),
+                    "macros_per_100g": extract_key_macros(detail),
                 }
             )
 
@@ -100,24 +100,26 @@ class FoodService:
             else 100.0
         )
 
+        factor = per_100g_nutrient_factor(raw)
         nutrients_per_100g: list[dict[str, Any]] = []
-        for row in raw.get("nutrients", []):
-            if not isinstance(row, dict):
-                continue
-            nid = row.get("id")
-            amt = row.get("amount")
-            if not isinstance(nid, int) or nid <= 0 or amt is None:
-                continue
-            meta = defs.get(nid, {})
-            nutrients_per_100g.append(
-                {
-                    "id": nid,
-                    "name": meta.get("name"),
-                    "unit": meta.get("unit"),
-                    "category": meta.get("category"),
-                    "amount": amt,
-                }
-            )
+        if factor is not None:
+            for row in raw.get("nutrients", []):
+                if not isinstance(row, dict):
+                    continue
+                nid = row.get("id")
+                amt = row.get("amount")
+                if not isinstance(nid, int) or nid <= 0 or amt is None:
+                    continue
+                meta = defs.get(nid, {})
+                nutrients_per_100g.append(
+                    {
+                        "id": nid,
+                        "name": meta.get("name"),
+                        "unit": meta.get("unit"),
+                        "category": meta.get("category"),
+                        "amount": round(float(amt) * factor, 4) if factor != 1.0 else amt,
+                    }
+                )
 
         return {
             "food_id": raw["id"],
@@ -133,7 +135,7 @@ class FoodService:
             "default_measure_id": raw.get("defaultMeasureId"),
             "default_serving_grams": round(serving_grams, 4),
             "measures": measures,
-            "macros_per_100g": extract_key_macros(raw, 1.0),
+            "macros_per_100g": extract_key_macros(raw),
             "nutrients_per_100g": nutrients_per_100g,
             "missing_fields_are_unknown": True,
         }

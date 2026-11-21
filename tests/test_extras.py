@@ -86,6 +86,13 @@ class ExtrasTests(unittest.TestCase):
         self.assertEqual(updated["target"]["min"], 145.0)
         self.assertEqual(updated["previous"]["min"], 120.0)
 
+        # Updating only maximum below the existing minimum (145) must be rejected
+        with self.assertRaises(ValidationError):
+            self.assistant.targets.set_nutrient_target("protein", maximum=50)
+        # Updating only minimum above the existing maximum (190) must be rejected
+        with self.assertRaises(ValidationError):
+            self.assistant.targets.set_nutrient_target("protein", minimum=250)
+
         scores = self.assistant.targets.get_nutrition_scores("2026-11-21")
         self.assertEqual(scores["category_count"], 2)
         self.assertEqual(self.assistant.targets.get_streak("2026-11-21")["streak"]["current"], 5)
@@ -106,12 +113,51 @@ class ExtrasTests(unittest.TestCase):
 
         fast = self.assistant.tracking.add_fast("2026-11-20 20:00", end="2026-11-21 12:00")
         self.assistant.tracking.edit_fast(fast["fast_id"], goal_hours=18)
+        # Editing only end to a time before existing start (2026-11-20 20:00) must be rejected
+        with self.assertRaises(ValidationError):
+            self.assistant.tracking.edit_fast(fast["fast_id"], end="2026-11-20 19:00")
+        # Editing only start to a time after existing end (2026-11-21 12:00) must be rejected
+        with self.assertRaises(ValidationError):
+            self.assistant.tracking.edit_fast(fast["fast_id"], start="2026-11-21 13:00")
         hist = self.assistant.tracking.get_fasting_history(
             start_day="2026-11-20", end_day="2026-11-21"
         )
         self.assertEqual(len(hist["fasting"]["fasts"]), 1)
         self.assistant.tracking.delete_fast(fast["fast_id"])
         self.assertEqual(self.assistant.tracking.get_fasting_stats()["stats"]["completedCount"], 0)
+
+    def test_find_entries_by_food_reports_physical_grams_for_native_recipe(self):
+        # 300 g native (meal=True) recipe; logging 150 g stores 0.5 batch fraction on wire
+        self.backend.foods[9901] = {
+            "id": 9901,
+            "name": "Native Soup",
+            "source": "Custom",
+            "category": 12,
+            "owner": 1001,
+            "retired": False,
+            "meal": True,
+            "labelType": "AMERICAN_2016",
+            "defaultMeasureId": 99011,
+            "barcodes": [],
+            "measures": [
+                {"id": 99010, "name": "full recipe", "type": "Recipe", "amount": 1.0, "value": 1.0},
+                {"id": 99011, "name": "serving", "type": "Recipe", "amount": 1.0, "value": 2.0},
+                {"id": 99012, "name": "g", "type": "Recipe", "amount": 1.0, "value": 300.0},
+            ],
+            "ingredients": [
+                {"foodId": 460334, "measureId": 1048861, "grams": 300.0, "amount": 1.0}
+            ],
+            "nutrients": [{"id": 208, "amount": 390.0}, {"id": 203, "amount": 8.1}],
+        }
+        self.assistant.diary.log_food_entries(
+            [{"food_id": 9901, "grams": 150}], day="2026-11-21", meal_group="lunch", time="12:30"
+        )
+        found = self.assistant.diary_extras.find_entries_by_food(
+            9901, start_day="2026-11-21", end_day="2026-11-21"
+        )
+        self.assertEqual(found["count"], 1)
+        self.assertAlmostEqual(found["entries"][0]["grams"], 150.0, places=2)
+        self.assertAlmostEqual(found["total_grams"], 150.0, places=2)
 
 
 if __name__ == "__main__":

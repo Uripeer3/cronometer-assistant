@@ -10,19 +10,51 @@ Run in a terminal:
 python3 scripts/run_tunnel.py --tunnel-id YOUR_TUNNEL_ID --save-key
 ```
 
-For a background Linux user service (`systemd`), point `.runtime/profile.yaml`'s MCP command at:
+For a background Linux user service (`systemd`) on a fresh clone:
 
-```text
-/abs/path/.venv/bin/python -m cronometer_assistant serve --db /abs/path/data/assistant.sqlite --session /abs/path/data/cronometer-session/session.json
-```
+1. Create `.runtime/profile.yaml` (mode `0600`) after saving your tunnel key via `run_tunnel.py --save-key`:
+   ```json
+   {
+     "config_version": 1,
+     "control_plane": {
+       "api_key": "file:/abs/path/.runtime/tunnel-api-key",
+       "base_url": "https://api.openai.com",
+       "tunnel_id": "YOUR_TUNNEL_ID"
+     },
+     "mcp": {
+       "commands": [
+         {
+           "channel": "main",
+           "command": "/abs/path/.venv/bin/python -m cronometer_assistant serve --db /abs/path/data/assistant.sqlite --session /abs/path/data/cronometer-session/session.json"
+         }
+       ]
+     }
+   }
+   ```
+2. Install `~/.config/systemd/user/cronometer-assistant.service`:
+   ```ini
+   [Unit]
+   Description=Cronometer MCP assistant
 
-Useful commands:
+   [Service]
+   Type=simple
+   WorkingDirectory=/abs/path
+   ExecStart=/abs/path/.runtime/tunnel-client run --profile-file /abs/path/.runtime/profile.yaml
+   Restart=on-failure
+   RestartSec=10
+   UMask=0077
 
-```bash
-systemctl --user status cronometer-assistant.service
-systemctl --user restart cronometer-assistant.service
-journalctl --user -u cronometer-assistant.service -n 50 --no-pager
-```
+   [Install]
+   WantedBy=default.target
+   ```
+3. Enable and manage the service:
+   ```bash
+   systemctl --user daemon-reload
+   systemctl --user enable --now cronometer-assistant.service
+   systemctl --user status cronometer-assistant.service
+   systemctl --user restart cronometer-assistant.service
+   journalctl --user -u cronometer-assistant.service -n 50 --no-pager
+   ```
 
 After updating code (`git pull --ff-only && uv sync --locked --extra mcp --extra live --no-dev`), restart the service, refresh tools in ChatGPT, and start a new chat.
 

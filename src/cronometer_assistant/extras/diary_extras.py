@@ -7,7 +7,7 @@ from typing import Any
 
 from ..auth import CronometerSessionClient
 from ..nutrition import ValidationError, clean_text
-from ..parsing import parse_day
+from ..parsing import parse_day, serving_scale_and_display
 
 MAX_SCAN_DAYS = 90
 
@@ -72,13 +72,26 @@ class DiaryExtrasService:
                 f"Date range exceeds {MAX_SCAN_DAYS} days; narrow start_date/end_date"
             )
         entries = self.client.find_entries_by_food(food_id, start=start, end=end)
+        raw_food = self.client.get_food(food_id)
+        normalized_entries: list[dict[str, Any]] = []
+        for entry in entries:
+            row_like = {
+                "foodId": food_id,
+                "measureId": entry.get("measure_id"),
+                "grams": entry.get("grams"),
+            }
+            _, _, _, actual_grams = serving_scale_and_display(raw_food, row_like)
+            item = dict(entry)
+            if actual_grams is not None:
+                item["grams"] = round(actual_grams, 2)
+            normalized_entries.append(item)
         return {
             "food_id": food_id,
             "start_date": start.isoformat(),
             "end_date": end.isoformat(),
-            "count": len(entries),
-            "total_grams": round(sum(float(e.get("grams") or 0) for e in entries), 2),
-            "entries": entries,
+            "count": len(normalized_entries),
+            "total_grams": round(sum(float(e.get("grams") or 0) for e in normalized_entries), 2),
+            "entries": normalized_entries,
         }
 
     def add_note(self, text: str, *, day: str | None = None) -> dict[str, Any]:
