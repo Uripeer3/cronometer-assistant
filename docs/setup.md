@@ -2,63 +2,19 @@
 
 ## 1. Connecting Your AI Client
 
+Start by setting up and testing whichever client(s) you use interactively in a terminal. Once that works, see [Section 2](#2-keeping-it-always-running-across-reboots-systemd) to keep remote clients reachable automatically after every reboot.
+
 ### ChatGPT (OpenAI MCP Tunnel)
 
-Run in a terminal:
+Run in a terminal to save your tunnel key and test the connection:
 
 ```bash
 python3 scripts/run_tunnel.py --tunnel-id YOUR_TUNNEL_ID --save-key
 ```
 
-For a background Linux user service (`systemd`) on a fresh clone:
-
-1. Create `.runtime/profile.yaml` (mode `0600`) after saving your tunnel key via `run_tunnel.py --save-key`:
-   ```json
-   {
-     "config_version": 1,
-     "control_plane": {
-       "api_key": "file:/abs/path/.runtime/tunnel-api-key",
-       "base_url": "https://api.openai.com",
-       "tunnel_id": "YOUR_TUNNEL_ID"
-     },
-     "mcp": {
-       "commands": [
-         {
-           "channel": "main",
-           "command": "/abs/path/.venv/bin/python -m cronometer_assistant serve --db /abs/path/data/assistant.sqlite --session /abs/path/data/cronometer-session/session.json"
-         }
-       ]
-     }
-   }
-   ```
-2. Install `~/.config/systemd/user/cronometer-assistant.service`:
-   ```ini
-   [Unit]
-   Description=Cronometer MCP assistant
-
-   [Service]
-   Type=simple
-   WorkingDirectory=/abs/path
-   ExecStart=/abs/path/.runtime/tunnel-client run --profile-file /abs/path/.runtime/profile.yaml
-   Restart=on-failure
-   RestartSec=10
-   UMask=0077
-
-   [Install]
-   WantedBy=default.target
-   ```
-3. Enable and manage the service:
-   ```bash
-   systemctl --user daemon-reload
-   systemctl --user enable --now cronometer-assistant.service
-   systemctl --user status cronometer-assistant.service
-   systemctl --user restart cronometer-assistant.service
-   journalctl --user -u cronometer-assistant.service -n 50 --no-pager
-   ```
-
-After updating code (`git pull --ff-only && uv sync --locked --extra mcp --extra live --no-dev`), restart the service, refresh tools in ChatGPT, and start a new chat.
-
 ### Claude Code, Claude Desktop, Gemini CLI, Cursor (`stdio`)
+
+Add this to your client's MCP configuration. Local `stdio` clients start and stop the server on demand themselves, so they do not need a background service:
 
 ```json
 {
@@ -89,7 +45,86 @@ This serves MCP at `http://127.0.0.1:8765/mcp` with a 24-hour idle session timeo
 
 ---
 
-## 2. Tool Tiers
+## 2. Keeping It Always Running Across Reboots (`systemd`)
+
+Remote AI clients (ChatGPT via the MCP tunnel, or web/mobile apps using `streamable-http`) can only reach your assistant while the server process is running on your computer. Running it manually in a terminal stops as soon as you close the terminal, crash, or reboot.
+
+Setting up a Linux user `systemd` service starts the MCP server automatically whenever your computer powers up or restarts—and restarts it automatically if it ever exits—so your agents can always reach Cronometer as long as your computer is on, with no terminal window needed. *(Local `stdio` clients like Claude Code or Gemini CLI don't need this step.)*
+
+### Option A: Auto-start the ChatGPT MCP Tunnel
+
+1. After running `run_tunnel.py --tunnel-id YOUR_TUNNEL_ID --save-key` once, create `.runtime/profile.yaml` (mode `0600`):
+   ```json
+   {
+     "config_version": 1,
+     "control_plane": {
+       "api_key": "file:/abs/path/.runtime/tunnel-api-key",
+       "base_url": "https://api.openai.com",
+       "tunnel_id": "YOUR_TUNNEL_ID"
+     },
+     "mcp": {
+       "commands": [
+         {
+           "channel": "main",
+           "command": "/abs/path/.venv/bin/python -m cronometer_assistant serve --db /abs/path/data/assistant.sqlite --session /abs/path/data/cronometer-session/session.json"
+         }
+       ]
+     }
+   }
+   ```
+2. Install `~/.config/systemd/user/cronometer-assistant.service`:
+   ```ini
+   [Unit]
+   Description=Cronometer MCP assistant
+   After=network-online.target
+   Wants=network-online.target
+
+   [Service]
+   Type=simple
+   WorkingDirectory=/abs/path
+   ExecStart=/abs/path/.runtime/tunnel-client run --profile-file /abs/path/.runtime/profile.yaml
+   Restart=on-failure
+   RestartSec=10
+   UMask=0077
+
+   [Install]
+   WantedBy=default.target
+   ```
+
+### Option B: Auto-start `streamable-http` instead
+
+Use the same `~/.config/systemd/user/cronometer-assistant.service` file, replacing `ExecStart` with:
+
+```ini
+ExecStart=/abs/path/.venv/bin/python -m cronometer_assistant serve --transport streamable-http --host 127.0.0.1 --port 8765 --db /abs/path/data/assistant.sqlite --session /abs/path/data/cronometer-session/session.json
+```
+
+### Enable, start, and manage the service
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now cronometer-assistant.service
+systemctl --user status cronometer-assistant.service
+```
+
+Optional—start on boot even before you log into a desktop session:
+
+```bash
+loginctl enable-linger "$USER"
+```
+
+Useful day-to-day commands:
+
+```bash
+systemctl --user restart cronometer-assistant.service
+journalctl --user -u cronometer-assistant.service -n 50 --no-pager
+```
+
+After updating code (`git pull --ff-only && uv sync --locked --extra mcp --extra live --no-dev`), restart the service, refresh tools in ChatGPT, and start a new chat.
+
+---
+
+## 3. Tool Tiers
 
 Pass an optional flag to `serve` to control which tool groups are exposed:
 
@@ -101,7 +136,7 @@ Pass an optional flag to `serve` to control which tool groups are exposed:
 
 ---
 
-## 3. Security & Reliability Choices
+## 4. Security & Reliability Choices
 
 - **Private local login:** `login` prompts with hidden terminal input and writes only `user_id`, the session token, and account timezone to `data/cronometer-session/session.json` (`0600` in a `0700` directory). Passwords and 2FA codes are never stored; HTTP/token loggers are disabled.
 - **Minimal profile exposure:** `check_connection` returns only timezone, today's date, and nutrition feature flags—never email, birthdate, or third-party integration tokens.
@@ -110,7 +145,7 @@ Pass an optional flag to `serve` to control which tool groups are exposed:
 
 ---
 
-## 4. Languages & Custom Label Aliases
+## 5. Languages & Custom Label Aliases
 
 All text handling is Unicode-native, so conversations, food searches, and personal aliases work in any language. Your AI maps nutrition labels to Cronometer's canonical nutrient names automatically.
 
@@ -128,7 +163,7 @@ LABEL_ALIASES = {
 
 ---
 
-## 5. Local Data & Troubleshooting
+## 6. Local Data & Troubleshooting
 
 Private runtime files live under `data/` (git-ignored):
 - `data/cronometer-session/session.json` — Cronometer session token.

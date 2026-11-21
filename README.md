@@ -36,7 +36,7 @@ uv sync --locked --extra mcp --extra live --no-dev
 python3 scripts/run_tunnel.py --tunnel-id YOUR_TUNNEL_ID --save-key
 ```
 
-See [docs/setup.md](docs/setup.md) for ChatGPT, Claude, and Gemini configs, Streamable HTTP setup, tool tiers, security details, and language customization.
+See [docs/setup.md](docs/setup.md) for ChatGPT, Claude, and Gemini configs, always-on `systemd` auto-start across reboots, Streamable HTTP setup, tool tiers, security details, and language customization.
 
 ## Architecture
 
