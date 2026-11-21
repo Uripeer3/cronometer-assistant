@@ -12,11 +12,8 @@ jobs:
   checks:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    env:
-      REQUIRE_MCP_TESTS: "1"
-      REQUIRE_LIVE_TESTS: "1"
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@11d5960a326750d8b7881df0226f9e82c39688e
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
         with:
           version: "0.12.3"
@@ -28,11 +25,9 @@ jobs:
         run: uv run --locked ruff check .
       - name: Format
         run: uv run --locked ruff format --check --diff .
-      - name: Domain and real MCP transport tests
+      - name: Unit and MCP round-trip tests
         run: uv run --locked --extra mcp --extra live python -m unittest discover -s tests -v
-      - name: CLI smoke test
-        run: uv run --locked cronometer-assistant demo
-      - name: Official tunnel CLI compatibility
+      - name: Tunnel launcher compatibility
         env:
           TUNNEL_RELEASE_API_TOKEN: ${{ github.token }}
         run: |
@@ -41,13 +36,17 @@ jobs:
           import sys
           import tempfile
           from pathlib import Path
-          from scripts.connect_demo import acquire_client, launch_arguments
+          from scripts.run_tunnel import acquire_client, launch_arguments
           with tempfile.TemporaryDirectory() as folder:
               root = Path(folder)
               client = acquire_client(root)
-              subprocess.run([str(client), 'help', 'quickstart'], check=True)
-              command = launch_arguments(client, 'tunnel_' + 'a' * 32,
-                                         Path(sys.executable), root / 'demo.sqlite')
+              command = launch_arguments(
+                  client,
+                  'tunnel_' + 'a' * 32,
+                  Path(sys.executable),
+                  root / 'assistant.sqlite',
+                  root / 'session.json',
+                  root / 'health.url',
+              )
               subprocess.run([*command, '--help'], check=True)
           PY
-

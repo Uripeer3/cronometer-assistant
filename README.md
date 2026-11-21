@@ -1,115 +1,117 @@
-# Cronometer conversational assistant
+# Cronometer Assistant
 
-A private prototype for logging meals through an existing AI assistant. The assistant handles Hebrew/English conversation and attached photos; this Python service owns persistent meal drafts, food-source policy, product memory, nutrient validation, and write reconciliation.
+A simple, thorough **MCP server** for logging nutrition in [Cronometer](https://cronometer.com) through a conversation with an AI assistant (**ChatGPT**, **Claude**, or **Gemini**) while you cook or eat.
 
-## Log meals in ChatGPT
+## Goal
 
-**Start here:** [End-to-end setup, automatic startup, updates and recovery](docs/setup-and-operations.md). It covers the local service, private key, tunnel, ChatGPT connection and everyday restart commands. Already set up? Jump to its everyday commands or update procedure.
+Manually logging meals in Cronometer takes a lot of clicking, unit math, and label transcription—especially while cooking or dealing with Israeli/EU nutrition labels.
 
-Use the **meals** server mode for a personal Cronometer diary. The server runs on your computer and ChatGPT reaches it through the existing private MCP tunnel. On a new installation, install the locked dependencies and sign in to Cronometer once from a terminal in the repository.
+This project splits the work cleanly:
+- **Your AI assistant** handles natural conversation in any language, voice input, and reading nutrition-label photos.
+- **This MCP server** handles accurate Cronometer API calls, unit/measure conversions, EU/US carbohydrate math, read-back verification, and lightweight personal memory.
+
+It builds on [`rollecode/cronometer-mcp`](https://github.com/rollecode/cronometer-mcp)'s Android mobile API client (`mobile.cronometer.com`), works with free or Gold Cronometer accounts, and avoids complex multi-mode workflows.
+
+## Everyday Usage
+
+Once connected, you just talk to your assistant naturally in any language:
+
+- **Log while cooking:** *"For lunch I'm having 150g cooked white rice, 2 large eggs, and 1 tbsp olive oil."* — Logs all items in one verified call, converting household units (`large`, `tbsp`, `pieces`, `cup`) using Cronometer's exact measures.
+- **Log usuals fast:** *"Log my usual yogurt, 200g."* — Checks your saved personal aliases, recent foods, and custom foods in one lookup.
+- **Check your day:** *"What did I eat today and how many calories and protein do I have left?"* — Returns every logged food (including entries added in the Cronometer app), calorie target/consumed/remaining, and both tracked and untracked nutrients.
+- **Fix mistakes:** *"Change that rice to 120g and move it to dinner at 19:15"* or *"Delete the yogurt."* — Edits amount, measure, time, meal group, or date on any serving, or removes multiple servings at once.
+- **Add missing packaged foods (EU/UK/AU/Israeli or US labels):** Send a label photo and say *"Add this to my custom foods."* — Supports all 94 Cronometer nutrients, localized label aliases, EU/international `excludes_fiber` vs US `includes_fiber` carb conversion, `Weight` measures (`serving` + `g`), and native Cronometer barcode linking.
+- **Batch cooking:** *"Save this chicken & rice batch as a recipe, final cooked weight is 950g, 4 servings."* — Adjusts per-100g nutrition for water loss during cooking.
+
+## Architecture
+
+```text
+  AI Host (ChatGPT / Claude / Gemini)
+         │  MCP (stdio or Streamable HTTP)
+         ▼
+  cronometer-assistant
+  ├── tools/        Flat MCP schemas split into core, extras, and tracking tiers
+  ├── core/         Meal logging, food discovery, custom foods & recipes
+  ├── extras/       Day management, targets, scores, streaks, biometrics/exercise/fasting
+  ├── nutrition.py  Pure label math (EU/US carbs, kJ, salt, ml density, exact value/amount measures)
+  ├── state.py      Single local SQLite DB (aliases, request_id dedup, optional cooking drafts)
+  └── auth.py       Private terminal login, mode-0600 session file, thread-safe client
+         │  HTTPS (Cronometer mobile API via cronometer-mcp client)
+         ▼
+  mobile.cronometer.com
+```
+
+### Core Design & Security Choices
+
+1. **Complete hooks, no silent gaps:** Batch food enrichment (`get_foods`), exact multi-unit measure math (`grams_per_unit = value / amount`), Weight + Atomic + Recipe logging, native barcodes, and measure-ID preservation on custom-food edits.
+2. **Safe writes by default:** Every diary add, edit, and delete is verified via read-back against Cronometer. Optional `request_id` deduplication prevents duplicate logs on network retries.
+3. **Honest nutrition data:** Missing nutrients stay unknown (never coerced to `0`). EU/international labels (`excludes_fiber`) require explicit fiber so Cronometer never double-subtracts fiber.
+4. **Private, minimal-exposure auth:** Login runs interactively in your local terminal (hidden input + 2FA)—passwords and TOTP seeds are never stored on disk or in env vars, token loggers are silenced, `check_connection` omits raw profile PII, and `streamable-http` defaults to `127.0.0.1` so remote exposure is always handled by an explicit authenticating proxy.
+5. **Works in any language:** All text normalization (`nutrition.normalize_key`) is Unicode-native (`NFKC`), so food names, searches, aliases, and notes work in any script. To let an AI pass native label headers directly for another language, add entries to `LABEL_ALIASES` in `src/cronometer_assistant/nutrition.py` (English and Hebrew are included out of the box).
+
+## Codebase Layout
+
+```text
+src/cronometer_assistant/
+├── auth.py              # Private login, mode-0600 session, thread-safe client (RLock)
+├── state.py             # Single SQLite store (aliases, idempotency, optional drafts)
+├── nutrition.py         # Pure label normalization, extensible LABEL_ALIASES, barcode & measure math
+├── parsing.py           # Shared date/time/meal-group/serving-scaling helpers
+├── core/                # Core everyday meal logging
+│   ├── foods.py         # Connection, batch search, details, my_foods, nutrients, aliases
+│   ├── diary.py         # Full-day food_log + targets, batch log, edit, remove, drafts
+│   └── custom.py        # Custom foods & recipes
+├── extras/              # Cleanly separated secondary features
+│   ├── diary_extras.py  # mark_day_complete, copy_day, find_entries_by_food, diary notes
+│   ├── targets.py       # Nutrient targets, macro schedules, nutrition scores, streaks
+│   └── tracking.py      # Opt-in biometrics, exercise, and fasting
+├── tools/               # MCP tool registration split by tier (core / extras / tracking)
+├── service.py           # Thin facade composing core + extras
+├── server.py            # FastMCP server (stdio + Streamable HTTP, 24h idle timeout)
+└── cli.py               # login | check | serve
+```
+
+### Tool Tiers
+
+Control how many tools are exposed when running `serve`:
+
+| Flag | Included Tiers | Tool Count |
+|---|---|---:|
+| *(default)* | Core meal logging (18) + Nutrition & diary extras (10) + Paging (1) | **29** |
+| `--core-only` | Core meal logging (18) + Paging (1) | **19** |
+| `--include-tracking` | Default (29) + Biometrics, Exercise & Fasting (13) | **42** |
+
+## Quick Start
+
+Requires Python 3.12+ and [`uv`](https://docs.astral.sh/uv/).
 
 ```bash
+# 1. Install locked dependencies
 uv sync --locked --extra mcp --extra live --no-dev
+
+# 2. Authenticate once privately in your terminal (hidden email, password, and optional 2FA)
 .venv/bin/python -m cronometer_assistant login
+
+# 3. Verify live connection and account timezone
+.venv/bin/python -m cronometer_assistant check
+
+# 4a. Run over local stdio (Claude Code, Claude Desktop, Gemini CLI, Cursor)
+.venv/bin/python -m cronometer_assistant serve
+
+# 4b. Run over Streamable HTTP (Claude.ai web/mobile or remote Gemini behind an HTTPS auth proxy)
+.venv/bin/python -m cronometer_assistant serve --transport streamable-http --host 127.0.0.1 --port 8765
+
+# 4c. Connect to ChatGPT via OpenAI MCP tunnel
+python3 scripts/run_tunnel.py --tunnel-id YOUR_TUNNEL_ID --save-key
 ```
 
-Start the server from the checkout that holds your private session and SQLite data. Stop any previous launcher using this tunnel first.
+See [docs/setup.md](docs/setup.md) for full client configuration, systemd auto-start, tool reference, and troubleshooting.
+
+## Development & Tests
 
 ```bash
-python3 scripts/connect_demo.py --mode meals --tunnel-id YOUR_TUNNEL_ID
+uv sync --locked --extra mcp --extra live --group dev
+uv run --locked ruff check .
+uv run --locked ruff format --check .
+uv run --locked python -m unittest discover -s tests -v
 ```
-
-Keep the launcher running. Once the tunnel is ready, refresh the connection in ChatGPT and select the Cronometer assistant. For a first read, ask **“How many calories and how much protein have I logged today?”** The `get_daily_nutrition` tool reads Cronometer's tracked totals for the chosen account day, including foods entered through the app. It returns amounts with units and leaves missing values unknown.
-
-To log a meal, describe what you ate in Hebrew or English. For example, **“For lunch at 13:00 I ate 150 g of cooked white rice.”** The assistant finds the food, verifies its preparation and nutrient basis, and shows the selected food, grams, date, account-local time and meal group. Once you confirm that review, `log_meal` sends each weighed serving and verifies the returned entry in the diary. The journal prevents a repeated request from adding a second serving. An uncertain response can be checked with `get_logging_status`.
-
-To change an assistant-logged serving, say **“Change that rice from 150 g to 120 g”** or **“Undo the rice.”** The assistant identifies the particular serving, asks for confirmation, then verifies the result. The tools are `correct_logged_amount` and `undo_logged_item`. A meal can contain several servings.
-
-The [current roadmap](docs/pr-map.md) and [independent code review](docs/code-review-2026-11-19.md) separate implemented features from acceptance and unresolved issues. The meal pilot is not yet declared ready for unattended everyday use.
-
-The installed ChatGPT connection has been tested with live food reads and daily totals. Automated tests exercise add, correct, undo and uncertain responses using the pinned Cronometer client and simulated HTTP. The final live write check is a real meal you choose to log, followed by a check of its date, amount and meal group in Cronometer.
-
-## Try the working demo
-
-Python 3.12+ on Linux/macOS. The core has no third-party runtime dependencies:
-
-```bash
-PYTHONPATH=src python3 -m cronometer_assistant demo
-PYTHONPATH=src python3 -m unittest discover -s tests -v
-```
-
-The demo starts with an ambiguous rice entry, produces a preparation question, records a resolved bilingual meal, verifies the simulated diary, and repeats the same request to demonstrate deduplication. Its temporary database is deleted at exit. Add `--db data/demo.sqlite` to retain the example diary between invocations; each new demo invocation represents a new meal.
-
-## Run the MCP server
-
-Install [uv](https://docs.astral.sh/uv/), then:
-
-```bash
-uv sync --locked --extra mcp --group dev
-uv run --locked --extra mcp cronometer-assistant serve --db data/demo.sqlite
-```
-
-The transport is **local stdio**, using the official MCP Python SDK. See [assistant setup](docs/assistant-setup.md) for a local-client configuration and the phone/ChatGPT compatibility gate. A public URL, OAuth server, and remote deployment are deliberately not part of this milestone.
-
-To test it in ChatGPT through an OpenAI private tunnel, use the [tunnel setup guide](docs/tunnel-setup.md) and `python3 scripts/connect_demo.py --tunnel-id YOUR_TUNNEL_ID`. The launcher prompts for a restricted runtime key privately in your terminal.
-
-## Implemented
-
-- Persistent drafts with revisions, consumption intent, and unresolved questions.
-- Revision-checked deletion of unlogged drafts; logged/uncertain meals are protected.
-- Source-aware ranking policy: identity/preparation first, then database preference. Live source mappings remain unverified; demo policy tests do not establish live database prioritization.
-- Verified product aliases, including Hebrew names, persisted across restarts.
-- Validation of structured label data, including serving basis, kJ/kcal, mass units, salt equivalent, and explicit density for ml-to-g conversion. The assistant reads the image; the backend validates extracted values.
-- Nutrient subtotals with missing-data coverage; absent values never become zero.
-- A persistent simulated diary and operation journal. Repeated commits reuse the same meal operation; a new identical meal is still valid.
-- Durable markers before writes, read-back verification, and reconciliation after an ambiguous timeout. No claim of exactly-once delivery against Cronometer.
-- A read-only adapter interface around the pinned existing Cronometer client, tested with synthetic response fixtures.
-- Separate real-food inspection tools with hidden local login, one-time 2FA, private session storage and blocked diary writes. See the [read-only guide](docs/cronometer-read-only.md).
-- A pure recipe-portion calculation using finished batch weight. Saved recipe versions and native recipe writes are future work.
-
-## Demo tool workflow
-
-1. `begin_meal` creates a draft; preparing a dish does not log consumption.
-2. `resolve_food` returns candidates with food IDs, sources, and nutrient profiles.
-3. `update_meal_draft` replaces the complete item list using the current revision. Record estimates and unresolved questions explicitly.
-4. `get_meal_review` returns suggested questions and known nutrient totals with coverage.
-5. Once the user identifies the consumed portion, set `intent=eaten` and review again.
-6. `commit_meal` writes only to the simulated diary. It reports committed only after read-back checks.
-7. `get_logging_status` lets a later session resume the same draft or inspect an unfinished operation.
-8. `delete_meal_draft` discards an unlogged draft when the user asks. It cannot undo diary entries.
-
-Photo-based product entry uses `propose_product_from_label` followed by `save_verified_product`. In demo mode the product is saved in the local demo catalog. `remember_product` records an alias only after the user establishes the preference.
-
-See [meal item fields and selected-food logging](docs/meal-draft-input.md) when
-resuming a dated draft or leaving an unresolved food for later.
-
-## Development and ownership
-
-Our application is independent of the upstream connector. Only the optional `live` extra depends on [rollecode/cronometer-mcp](https://github.com/rollecode/cronometer-mcp), pinned to commit `e123a4721093efa55adac665e10a546c105eb117`. Nothing from that project has been copied into this source tree. Live login uses hidden local terminal prompts. The meals MCP mode exposes reviewed serving writes through the account-bound diary workflow.
-
-Use short branches and pull requests. CI checks formatting/lint, domain tests, package installation, and a real SDK/stdio round trip. Test fixtures need no food/health data, credentials, or repository secrets. Read [development notes](docs/development.md) and the [implementation plan](docs/implementation-plan.md).
-
-GitHub stores source and synthetic fixtures. Runtime SQLite files, credentials, session tokens, and package-label photographs remain outside the repository.
-
-## Review fixes and private custom foods
-
-The [implementation review](docs/review-and-products.md) records the label,
-unit, duplication, and creation-recovery fixes and the product-mode test procedure.
-Label carbs now require an explicit fiber convention; raw values and sugar alcohols
-are preserved. The current read-only connection stays read-only.
-
-After updating, `--mode meals` includes reviewed private-food creation alongside
-meal logging, with account-bound journals and read-back checks. An exact product
-missing from search can be prepared from its label, saved privately, verified,
-and added to a separately reviewed meal in the same conversation. The narrower
-`--mode products` remains available without diary access. Neither mode can edit
-existing foods, link native barcodes, or publish to CRDB. The public
-submission tool is a checklist, not a submission API. A controlled private-food creation and UI correction have been exercised; automated
-tests use synthetic data and do not create real foods.
-
-See the [development PR map](docs/pr-map.md) for the next review and test sequence.
-
-
-## Pilot guides
-
-The merged pilot includes [private product evidence](docs/product-evidence.md), [manual food repair reconciliation](docs/product-repairs.md), [local drafts using real foods](docs/live-drafts.md) and [backup/restore](docs/backups.md). The [PR map](docs/pr-map.md) records current status, priorities and acceptance tests; the [upstream comparison](docs/upstream-comparison.md) inventories the original connector and our intentional omissions.

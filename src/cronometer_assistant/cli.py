@@ -1,204 +1,110 @@
-"""Run demo tools or inspect a real Cronometer food catalog without diary writes."""
+"""CLI for Cronometer authentication, health checks, and running the MCP server."""
+
+from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
-import tempfile
 from pathlib import Path
 
-from .models import ValidationError
-from .service import MealService
-from .store import Store
+from .auth import AuthError, CronometerSessionClient
+from .nutrition import ValidationError
+from .service import CronometerAssistant
+from .state import AssistantState
 
 
-def run_demo(path: Path) -> dict:
-    service = MealService(Store(path))
-    meal = service.begin_meal("אורז ויוגורט / rice and yogurt", intent="eaten")["meal"]
-    first = service.update_meal(
-        meal["meal_id"],
-        expected_revision=0,
-        items=[{"description": "אורז / rice", "food_id": "demo:rice-cooked", "grams": 150}],
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="cronometer-assistant",
+        description="Simple, thorough conversational MCP server for Cronometer.",
     )
-    ready = service.update_meal(
-        meal["meal_id"],
-        expected_revision=1,
-        items=[
-            {
-                "description": "אורז מבושל",
-                "food_id": "demo:rice-cooked",
-                "grams": 150,
-                "preparation": "cooked",
-            },
-            {
-                "description": "יוגורט",
-                "food_id": "demo:yogurt",
-                "grams": 200,
-                "preparation": "as_sold",
-            },
-        ],
-    )
-    commit = service.commit_meal(meal["meal_id"], 2)
-    repeated = service.commit_meal(meal["meal_id"], 2)
-    return {
-        "mode": "demo",
-        "real_diary_changed": False,
-        "first_follow_up": first["review"]["suggested_next_questions"],
-        "review": ready["review"],
-        "logging_state": commit["operation"]["state"],
-        "repeat_was_deduplicated": repeated["already_logged"],
-        "simulated_entries": len(service.status(meal["meal_id"])["diary"]),
-    }
-
-
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "command",
-        choices=[
-            "demo",
-            "serve",
-            "login",
-            "check-cronometer",
-            "serve-read-only",
-            "serve-products",
-            "serve-drafts",
-            "serve-meals",
-            "backup-runtime",
-            "verify-backup",
-            "restore-runtime",
-        ],
-    )
-    parser.add_argument("--db", type=Path, help="Persistent SQLite path (private runtime data)")
-    parser.add_argument(
-        "--products-db",
-        type=Path,
-        help="Meals mode product store (default: products.sqlite beside --db)",
+        choices=["login", "check", "serve"],
+        help="Command to run.",
     )
     parser.add_argument(
         "--session",
         type=Path,
         default=Path("data/cronometer-session/session.json"),
-        help="Private local Cronometer session; never a password file",
+        help="Private mode-0600 Cronometer session file (never stores passwords).",
     )
-    parser.add_argument("--evidence-inbox", type=Path, help="Private host-managed image inbox")
     parser.add_argument(
-        "--backup-dir", type=Path, help="New private backup or existing verified backup"
+        "--db",
+        type=Path,
+        default=Path("data/assistant.sqlite"),
+        help="Local SQLite file for aliases, idempotency, and optional drafts.",
     )
-    parser.add_argument("--restore-dir", type=Path, help="New isolated restore directory")
-    args = parser.parse_args()
-    if args.products_db is not None and args.command != "serve-meals":
-        parser.error("--products-db is only supported with serve-meals")
-    if args.command in {"backup-runtime", "verify-backup", "restore-runtime"}:
-        from .backups import create_backup, restore_backup, verify_backup
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "streamable-http"],
+        default="stdio",
+        help="MCP transport for `serve` (stdio for ChatGPT tunnel/Claude Code/Gemini CLI; streamable-http for remote Claude.ai/Gemini HTTP).",
+    )
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Bind host for streamable-http transport (default: 127.0.0.1).",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8765,
+        help="Bind port for streamable-http transport (default: 8765).",
+    )
+    parser.add_argument(
+        "--core-only",
+        action="store_true",
+        help="Expose only the 18 core meal-logging tools (+ paging), omitting diary/target extras.",
+    )
+    parser.add_argument(
+        "--include-tracking",
+        action="store_true",
+        help="Also expose biometrics, exercise, and fasting tools.",
+    )
+    return parser
 
-        try:
-            if args.backup_dir is None:
-                raise ValidationError("Provide --backup-dir")
-            if args.command == "backup-runtime":
-                if args.db is None or args.db.is_symlink() or not args.db.is_file():
-                    raise ValidationError(
-                        "Provide --db pointing to an existing application database"
-                    )
-                result = create_backup(Store(args.db), args.backup_dir)
-            elif args.command == "verify-backup":
-                result = verify_backup(args.backup_dir)
-            else:
-                if args.restore_dir is None:
-                    raise ValidationError("Provide a new --restore-dir")
-                result = restore_backup(args.backup_dir, args.restore_dir)
-            print(json.dumps(result, indent=2))
-        except (OSError, ValueError, RuntimeError):
-            print(
-                "Backup operation failed; check private paths, integrity and destination availability.",
-                file=sys.stderr,
-            )
-            raise SystemExit(1) from None
-        return
-    if args.command in {
-        "login",
-        "check-cronometer",
-        "serve-read-only",
-        "serve-products",
-        "serve-drafts",
-        "serve-meals",
-    }:
-        from .live import LiveError, ReadOnlyConnection, create_client
 
-        connection = None
-        try:
-            connection = ReadOnlyConnection(
-                create_client(
-                    args.session,
-                    interactive=args.command == "login",
-                    allow_product_creation=args.command in {"serve-products", "serve-meals"},
-                    allow_diary=args.command == "serve-meals",
-                )
-            )
-            if args.command == "login":
-                connection.client.login()
-                print("Session saved privately. Run check-cronometer to verify food-data access.")
-            elif args.command == "check-cronometer":
-                print(json.dumps(connection.check(), ensure_ascii=False, indent=2))
-            else:
-                from .read_only_server import create_read_only_server
+def main(argv: list[str] | None = None) -> None:
+    logging.basicConfig(
+        level=logging.WARNING,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        stream=sys.stderr,
+    )
+    args = build_parser().parse_args(argv)
 
-                draft_path = args.db or Path(
-                    "data/products.sqlite"
-                    if args.command == "serve-products"
-                    else "data/drafts.sqlite"
-                )
-                products = None
-                if args.command in {"serve-products", "serve-meals"}:
-                    from .products import ProductService
-
-                    product_path = (
-                        args.products_db or draft_path.with_name("products.sqlite")
-                        if args.command == "serve-meals"
-                        else draft_path
-                    )
-                    products = ProductService(
-                        Store(product_path),
-                        connection.client,
-                        evidence_inbox=args.evidence_inbox,
-                    )
-                drafts = None
-                if args.command in {"serve-drafts", "serve-products", "serve-meals"}:
-                    from .live_drafts import LiveDraftService, LiveMealService
-
-                    service = LiveMealService if args.command == "serve-meals" else LiveDraftService
-                    drafts = service(
-                        Store(draft_path),
-                        connection.client,
-                    )
-                create_read_only_server(
-                    connection,
-                    product_service=products,
-                    draft_service=drafts,
-                    live_meals=args.command == "serve-meals",
-                ).run(transport="stdio")
-        except (LiveError, ValidationError) as error:
-            print(str(error), file=sys.stderr)  # Only our scrubbed diagnostics.
-            raise SystemExit(1) from None
-        except (OSError, EOFError):
-            print("Connection unavailable. Check setup and run login locally.", file=sys.stderr)
-            raise SystemExit(1) from None
-        finally:
-            if connection:
-                connection.close()
-        return
-    if args.command == "demo":
-        if args.db:
-            print(json.dumps(run_demo(args.db), ensure_ascii=False, indent=2))
+    client: CronometerSessionClient | None = None
+    try:
+        client = CronometerSessionClient(args.session, interactive=(args.command == "login"))
+        if args.command == "login":
+            client.login()
+            print("Session saved privately. Run `cronometer-assistant check` to verify access.")
+        elif args.command == "check":
+            assistant = CronometerAssistant(client)
+            print(json.dumps(assistant.foods.check_connection(), ensure_ascii=False, indent=2))
         else:
-            with tempfile.TemporaryDirectory(prefix="meal-demo-") as folder:
-                print(
-                    json.dumps(run_demo(Path(folder) / "demo.sqlite"), ensure_ascii=False, indent=2)
-                )
-    else:
-        from .server import create_server
+            from .server import create_server
 
-        path = args.db or Path("data/demo.sqlite")
-        create_server(MealService(Store(path))).run(transport="stdio")
+            state = AssistantState(args.db, user_id=client.user_id)
+            assistant = CronometerAssistant(client, state=state)
+            server = create_server(
+                assistant,
+                include_extras=not args.core_only,
+                include_tracking=args.include_tracking,
+                host=args.host,
+                port=args.port,
+            )
+            server.run(transport=args.transport)
+    except (AuthError, ValidationError) as error:
+        print(str(error), file=sys.stderr)
+        raise SystemExit(1) from None
+    except (OSError, EOFError) as error:
+        print(f"Unable to start Cronometer assistant: {error}", file=sys.stderr)
+        raise SystemExit(1) from None
+    finally:
+        if client is not None:
+            client.close()
 
 
 if __name__ == "__main__":

@@ -1,0 +1,891 @@
+"""End-to-end core service, mocked-HTTP CronometerClient, MCP tier & schema, and launcher tests."""
+
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import io
+import json
+import tempfile
+import unittest
+import zipfile
+from pathlib import Path
+from typing import Any
+
+import httpx
+
+from cronometer_assistant.auth import CronometerSessionClient
+from cronometer_assistant.nutrition import ValidationError
+from cronometer_assistant.server import SESSION_IDLE_TIMEOUT, create_server
+from cronometer_assistant.service import CronometerAssistant
+from cronometer_assistant.state import AssistantState
+from scripts.run_tunnel import (
+    choose_asset,
+    install_archive,
+    launch_arguments,
+    validate_tunnel_id,
+)
+
+
+class FakeCronometerBackend:
+    """Stateful fake mobile.cronometer.com backend wired via httpx.MockTransport."""
+
+    def __init__(self, *, user_id: int = 1001, timezone: str = "Asia/Jerusalem") -> None:
+        self.user_id = user_id
+        self.timezone = timezone
+        self.next_id = 5000
+        self.next_food_id = 9000
+        self.next_measure_id = 80000
+        self.diary: dict[str, list[dict[str, Any]]] = {}
+        self.day_complete: dict[str, bool] = {}
+        self.targets: dict[int, dict[str, Any]] = {
+            203: {"id": 203, "min": 120.0, "max": 180.0, "custom": True, "vis": True},
+            324: {"id": 324, "min": 600.0, "custom": False, "vis": True},
+        }
+        self.tamper_serving_grams: float | None = None
+        self.fasts: list[dict[str, Any]] = []
+        self.foods: dict[int, dict[str, Any]] = {
+            460334: {
+                "id": 460334,
+                "name": "White Rice, Cooked in Unsalted Water",
+                "source": "NCCDB:11272",
+                "category": 6,
+                "owner": None,
+                "retired": False,
+                "meal": False,
+                "labelType": "AMERICAN",
+                "defaultMeasureId": 1048859,
+                "barcodes": [],
+                "measures": [
+                    {
+                        "id": 1048859,
+                        "name": "cup",
+                        "type": "Weight",
+                        "amount": 1,
+                        "value": 158.0,
+                        "hidden": False,
+                    },
+                    {
+                        "id": 1048861,
+                        "name": "g",
+                        "type": "Weight",
+                        "amount": 1,
+                        "value": 1.0,
+                        "hidden": False,
+                    },
+                ],
+                "nutrients": [
+                    {"id": 208, "amount": 130.0},
+                    {"id": 203, "amount": 2.7},
+                    {"id": 205, "amount": 28.0},
+                    {"id": 291, "amount": 0.4},
+                    {"id": 204, "amount": 0.3},
+                    {"id": 262, "amount": 0.0},
+                ],
+            },
+            72014363: {
+                "id": 72014363,
+                "name": "Pretzels, Beigale, Rings",
+                "source": "Custom",
+                "category": 21,
+                "owner": user_id,
+                "retired": False,
+                "meal": False,
+                "labelType": "AMERICAN_2016",
+                "defaultMeasureId": 2001,
+                "barcodes": ["7290111568961"],
+                "measures": [
+                    {
+                        "id": 2001,
+                        "name": "pieces",
+                        "type": "Weight",
+                        "amount": 22,
+                        "value": 30.0,
+                        "hidden": False,
+                    },
+                    {
+                        "id": 2002,
+                        "name": "g",
+                        "type": "Weight",
+                        "amount": 1,
+                        "value": 1.0,
+                        "hidden": False,
+                    },
+                ],
+                "nutrients": [
+                    {"id": 208, "amount": 380.0},
+                    {"id": 203, "amount": 10.0},
+                    {"id": 205, "amount": 78.0},
+                    {"id": 291, "amount": 3.0},
+                    {"id": 204, "amount": 3.0},
+                    {"id": 262, "amount": 5.0},
+                ],
+            },
+            71586518: {
+                "id": 71586518,
+                "name": "Tnuva Almond Drink",
+                "source": "Custom",
+                "category": 4,
+                "owner": user_id,
+                "retired": False,
+                "meal": False,
+                "labelType": "EU",
+                "defaultMeasureId": 3001,
+                "barcodes": ["7290014760141"],
+                "measures": [
+                    {
+                        "id": 3001,
+                        "name": "ml",
+                        "type": "Atomic",
+                        "amount": 100,
+                        "value": 100.0,
+                        "hidden": False,
+                    },
+                ],
+                "nutrients": [
+                    {"id": 208, "amount": 24.0},
+                    {"id": 203, "amount": 0.5},
+                    {"id": 204, "amount": 1.1},
+                ],
+            },
+        }
+        self.nutrient_defs = [
+            {"id": 208, "name": "Energy", "unit": "kcal", "category": "General"},
+            {"id": 203, "name": "Protein", "unit": "g", "category": "Protein"},
+            {"id": 205, "name": "Carbs", "unit": "g", "category": "Carbohydrates"},
+            {"id": -1205, "name": "Net Carbs", "unit": "g", "category": "Carbohydrates"},
+            {"id": 291, "name": "Fiber", "unit": "g", "category": "Carbohydrates"},
+            {"id": 269, "name": "Sugars", "unit": "g", "category": "Carbohydrates"},
+            {"id": 10007, "name": "Sugar Alcohol", "unit": "g", "category": "Carbohydrates"},
+            {"id": 204, "name": "Fat", "unit": "g", "category": "Lipids"},
+            {"id": 606, "name": "Saturated", "unit": "g", "category": "Lipids"},
+            {"id": 605, "name": "Trans-Fats", "unit": "g", "category": "Lipids"},
+            {"id": 307, "name": "Sodium", "unit": "mg", "category": "Minerals"},
+            {"id": 324, "name": "Vitamin D", "unit": "IU", "category": "Vitamins"},
+            {"id": 262, "name": "Caffeine", "unit": "mg", "category": "General"},
+        ]
+
+    def _alloc(self) -> int:
+        val = self.next_id
+        self.next_id += 1
+        return val
+
+    def transport(self) -> httpx.MockTransport:
+        return httpx.MockTransport(self._handle)
+
+    def _handle(self, request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        body = json.loads(request.content.decode()) if request.content else {}
+
+        if path == "/api/v2/get_profile":
+            return httpx.Response(
+                200,
+                json={
+                    "result": "SUCCESS",
+                    "id": self.user_id,
+                    "timezone": self.timezone,
+                    "prefs": [
+                        {"DG_ON": "true"},
+                        {"time.on": "true"},
+                        {"targets.macros.netcarbs": "true"},
+                        {"gold": False},
+                    ],
+                },
+            )
+
+        if path == "/api/v2/get_nutrients":
+            return httpx.Response(200, json={"result": "SUCCESS", "nutrients": self.nutrient_defs})
+
+        if path == "/api/v2/find_food":
+            q = (body.get("query") or "").lower()
+            tab = body.get("tab", "ALL")
+            matches = []
+            for f in self.foods.values():
+                if tab == "CUSTOM" and (f.get("owner") != self.user_id or f.get("retired")):
+                    continue
+                if (
+                    not q
+                    or q in f["name"].lower()
+                    or q in (f.get("barcodes") or [])
+                    or (q == "אורז" and "rice" in f["name"].lower())
+                ):
+                    matches.append(
+                        {
+                            "id": f["id"],
+                            "name": f["name"],
+                            "source": f["source"].split(":")[0],
+                            "measureId": f["defaultMeasureId"],
+                            "translationId": 0,
+                            "measureDisplayName": f["measures"][0]["name"]
+                            if f["measures"]
+                            else "g",
+                        }
+                    )
+            return httpx.Response(200, json={"result": "SUCCESS", "foods": matches})
+
+        if path == "/api/v2/get_food":
+            fid = body["id"]
+            if fid not in self.foods:
+                return httpx.Response(404, json={"result": "FAIL"})
+            return httpx.Response(200, json=self.foods[fid])
+
+        if path == "/api/v2/get_foods":
+            ids = body.get("ids", [])
+            return httpx.Response(
+                200,
+                json={
+                    "result": "SUCCESS",
+                    "foods": [self.foods[i] for i in ids if i in self.foods],
+                },
+            )
+
+        if path == "/api/v2/get_recent_foods":
+            return httpx.Response(
+                200,
+                json={
+                    "result": "SUCCESS",
+                    "servings": [{"food": self.foods[460334], "count": 12}],
+                },
+            )
+
+        if path == "/api/v2/add_food":
+            data = dict(body["data"])
+            fid = data.get("id") or 0
+            if fid == 0:
+                fid = self.next_food_id
+                self.next_food_id += 1
+                data["id"] = fid
+            data["owner"] = self.user_id
+            data["source"] = data.get("source") or "Custom"
+            measures = []
+            for m in data.get("measures", []):
+                m_copy = dict(m)
+                if not m_copy.get("id"):
+                    m_copy["id"] = self.next_measure_id
+                    self.next_measure_id += 1
+                measures.append(m_copy)
+            data["measures"] = measures
+            if not data.get("defaultMeasureId") and measures:
+                data["defaultMeasureId"] = measures[-1]["id"]
+            self.foods[fid] = data
+            return httpx.Response(200, json={"result": "SUCCESS", "id": fid})
+
+        if path == "/api/v2/get_diary":
+            day_key = body["day"]
+            entries = list(self.diary.get(day_key, []))
+            consumed_kcal = 0.0
+            for e in entries:
+                if e.get("type") == "Serving":
+                    f = self.foods.get(e["foodId"], {})
+                    kcal_100 = next(
+                        (n["amount"] for n in f.get("nutrients", []) if n["id"] == 208), 0.0
+                    )
+                    consumed_kcal += kcal_100 * e["grams"] / 100.0
+            return httpx.Response(
+                200,
+                json={
+                    "info": {"day": day_key, "complete": self.day_complete.get(day_key, False)},
+                    "diary": entries,
+                    "summary": {
+                        "macros": {"energy": 2000, "protein": 140, "carbs": 200, "fat": 65},
+                        "consumed": {"total": round(consumed_kcal, 2)},
+                        "burned": {"total": 2400},
+                    },
+                },
+            )
+
+        if path == "/api/v2/get_nutrition_scores":
+            sids = set(body.get("servingIds", []))
+            totals = {208: 0.0, 203: 0.0, 205: 0.0, 291: 0.0, 204: 0.0}
+            for entries in self.diary.values():
+                for e in entries:
+                    if e.get("servingId") in sids:
+                        f = self.foods.get(e["foodId"], {})
+                        for n in f.get("nutrients", []):
+                            if n["id"] in totals:
+                                totals[n["id"]] += n["amount"] * e["grams"] / 100.0
+            return httpx.Response(
+                200,
+                json={
+                    "result": "SUCCESS",
+                    "scores": [
+                        {
+                            "title": "All Targets",
+                            "score": 82.0,
+                            "components": [
+                                {"nutrientId": nid, "amount": round(val, 4), "confidence": 1.0}
+                                for nid, val in totals.items()
+                            ],
+                        },
+                        {"title": "Vitamins", "score": 75.0, "components": []},
+                    ],
+                },
+            )
+
+        if path == "/api/v2/add_serving":
+            row = dict(body["serving"])
+            if self.tamper_serving_grams is not None:
+                row["grams"] = self.tamper_serving_grams
+            sid = self._alloc()
+            row["servingId"] = sid
+            self.diary.setdefault(row["day"], []).append(row)
+            return httpx.Response(200, json={"result": "SUCCESS", "id": sid})
+
+        if path == "/api/v2/edit_serving":
+            row = dict(body["serving"])
+            if self.tamper_serving_grams is not None:
+                row["grams"] = self.tamper_serving_grams
+            sid = row["servingId"]
+            for day_key, entries in list(self.diary.items()):
+                self.diary[day_key] = [e for e in entries if e.get("servingId") != sid]
+            self.diary.setdefault(row["day"], []).append(row)
+            return httpx.Response(200, json={"result": "SUCCESS"})
+
+        if path == "/api/v2/set_complete":
+            self.day_complete[body["day"]] = bool(body["complete"])
+            return httpx.Response(200, json={"result": "SUCCESS"})
+
+        if path == "/api/v2/copy":
+            src_entries = self.diary.get(body["from"], [])
+            for e in src_entries:
+                copied = dict(e)
+                copied["day"] = body["to"]
+                if copied.get("type") == "Serving":
+                    copied["servingId"] = self._alloc()
+                self.diary.setdefault(body["to"], []).append(copied)
+            return httpx.Response(200, json={"result": "SUCCESS"})
+
+        if path == "/api/v2/add_note":
+            note = dict(body["note"])
+            nid = self._alloc()
+            note["noteId"] = nid
+            self.diary.setdefault(note["day"], []).append(note)
+            return httpx.Response(200, json={"result": "SUCCESS", "id": nid})
+
+        if path == "/api/v2/edit_note":
+            note = dict(body["note"])
+            nid = note["noteId"]
+            for day_key in list(self.diary):
+                self.diary[day_key] = [
+                    note if e.get("noteId") == nid else e for e in self.diary[day_key]
+                ]
+            return httpx.Response(200, json={"result": "SUCCESS"})
+
+        if path == "/api/v2/get_targets":
+            return httpx.Response(
+                200, json={"result": "SUCCESS", "targets": list(self.targets.values())}
+            )
+
+        if path == "/api/v2/edit_target":
+            tid = body["id"]
+            self.targets[tid] = {
+                "id": tid,
+                "min": body.get("min"),
+                "max": body.get("max"),
+                "custom": body.get("cus", False),
+                "vis": body.get("vis", True),
+            }
+            return httpx.Response(200, json={"result": "SUCCESS"})
+
+        if path == "/api/v2/get_macro_schedules":
+            return httpx.Response(200, json={"result": "SUCCESS", "schedules": []})
+
+        if path == "/api/v2/get_macro_target_templates":
+            return httpx.Response(200, json={"result": "SUCCESS", "templates": []})
+
+        if path == "/api/v2/get_streak":
+            return httpx.Response(200, json={"result": "SUCCESS", "current": 5, "longest": 14})
+
+        if path == "/api/v2/get_metrics":
+            return httpx.Response(
+                200,
+                json={
+                    "result": "SUCCESS",
+                    "metrics": [{"id": 1, "name": "Weight", "units": [{"id": 1, "name": "kg"}]}],
+                },
+            )
+
+        if path == "/api/v2/get_biometrics":
+            return httpx.Response(
+                200, json={"result": "SUCCESS", "data": [{"day": "2026-11-21", "value": 80.5}]}
+            )
+
+        if path == "/api/v2/add_biometric":
+            row = dict(body["biometric"])
+            bid = self._alloc()
+            row["biometricId"] = bid
+            self.diary.setdefault(row["day"], []).append(row)
+            return httpx.Response(200, json={"result": "SUCCESS", "id": bid})
+
+        if path == "/api/v2/edit_biometric":
+            row = dict(body["biometric"])
+            bid = row["biometricId"]
+            for day_key in list(self.diary):
+                self.diary[day_key] = [
+                    row if e.get("biometricId") == bid else e for e in self.diary[day_key]
+                ]
+            return httpx.Response(200, json={"result": "SUCCESS"})
+
+        if path == "/api/v2/add_exercise":
+            row = dict(body["exercise"])
+            eid = self._alloc()
+            row["exerciseId"] = eid
+            self.diary.setdefault(row["day"], []).append(row)
+            return httpx.Response(200, json={"result": "SUCCESS", "id": eid})
+
+        if path == "/api/v2/edit_exercise":
+            row = dict(body["exercise"])
+            eid = row["exerciseId"]
+            for day_key in list(self.diary):
+                self.diary[day_key] = [
+                    row if e.get("exerciseId") == eid else e for e in self.diary[day_key]
+                ]
+            return httpx.Response(200, json={"result": "SUCCESS"})
+
+        if path == "/api/v2/get_fasting_with_date_range":
+            return httpx.Response(200, json={"result": "SUCCESS", "fasts": list(self.fasts)})
+
+        if path == "/api/v2/get_fasting_stats":
+            return httpx.Response(
+                200, json={"result": "SUCCESS", "completedCount": len(self.fasts)}
+            )
+
+        if path == "/api/v2/add_fast":
+            fast = dict(body["fast"])
+            fid = self._alloc()
+            fast["id"] = fid
+            self.fasts.append(fast)
+            return httpx.Response(200, json={"result": "SUCCESS", "id": fid})
+
+        if path == "/api/v2/edit_fast":
+            fast = dict(body["fast"])
+            self.fasts = [fast if f["id"] == fast["id"] else f for f in self.fasts]
+            return httpx.Response(200, json={"result": "SUCCESS"})
+
+        if path == "/api/v2/delete_fast":
+            self.fasts = [f for f in self.fasts if f["id"] != body["fastId"]]
+            return httpx.Response(200, json={"result": "SUCCESS"})
+
+        if request.method == "DELETE" and path == f"/api/v3/user/{self.user_id}/diary-entries":
+            ids_to_del = {e.get("id") for e in body.get("diaryEntries", [])}
+            for day_key in list(self.diary):
+                self.diary[day_key] = [
+                    e
+                    for e in self.diary[day_key]
+                    if (e.get("servingId") or e.get("biometricId") or e.get("exerciseId"))
+                    not in ids_to_del
+                ]
+            return httpx.Response(204)
+
+        return httpx.Response(404, json={"result": "FAIL", "error": f"Unhandled {path}"})
+
+
+def _has_string_int_union(schema: Any) -> bool:
+    """Detect `str | int` anyOf unions that break strict schema parsers such as Gemini."""
+    if isinstance(schema, dict):
+        any_of = schema.get("anyOf")
+        if isinstance(any_of, list):
+            types = {entry.get("type") for entry in any_of if isinstance(entry, dict)}
+            if {"string", "integer"}.issubset(types):
+                return True
+        return any(_has_string_int_union(v) for v in schema.values())
+    if isinstance(schema, list):
+        return any(_has_string_int_union(item) for item in schema)
+    return False
+
+
+class ServiceAndMCPTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        root = Path(self.tmp.name)
+        sdir = root / "session"
+        sdir.mkdir(mode=0o700)
+        self.session_path = sdir / "session.json"
+        self.session_path.write_text(
+            json.dumps({"version": 1, "user_id": 1001, "token": "fake-tok", "timezone": "UTC"})
+        )
+        self.session_path.chmod(0o600)
+
+        self.backend = FakeCronometerBackend(user_id=1001, timezone="Asia/Jerusalem")
+        self.client = CronometerSessionClient(
+            self.session_path, interactive=False, transport=self.backend.transport()
+        )
+        self.state = AssistantState(root / "assistant.sqlite", user_id=1001)
+        self.assistant = CronometerAssistant(self.client, state=self.state)
+
+    def tearDown(self):
+        self.client.close()
+        self.tmp.cleanup()
+
+    def test_connection_syncs_drifted_timezone_automatically(self):
+        info = self.assistant.foods.check_connection()
+        self.assertTrue(info["connected"])
+        self.assertEqual(info["account_timezone"], "Asia/Jerusalem")
+        persisted = json.loads(self.session_path.read_text())
+        self.assertEqual(persisted["timezone"], "Asia/Jerusalem")
+
+    def test_search_preserves_hebrew_to_english_and_barcode_results(self):
+        res = self.assistant.foods.search_foods("אורז")
+        self.assertEqual(res["count"], 1)
+        self.assertEqual(res["foods"][0]["food_id"], 460334)
+        self.assertEqual(res["foods"][0]["source"], "NCCDB")
+
+        bc = self.assistant.foods.search_foods("7290014760141")
+        self.assertEqual(bc["count"], 1)
+        self.assertEqual(bc["foods"][0]["food_id"], 71586518)
+
+    def test_batch_log_quantity_atomic_edit_move_and_delete(self):
+        logged = self.assistant.diary.log_food_entries(
+            [
+                {"food_id": 460334, "grams": 150},
+                {"food_id": 72014363, "quantity": 11, "measure_name": "pieces"},
+                {"food_id": 71586518, "quantity": 200, "measure_name": "ml"},
+            ],
+            day="2026-11-21",
+            meal_group="lunch",
+            time="13:15",
+            request_id="meal-abc-1",
+        )
+        self.assertEqual(logged["logged_count"], 3)
+        self.assertAlmostEqual(logged["logged"][1]["grams"], 15.0, places=3)
+        self.assertAlmostEqual(logged["logged"][2]["grams"], 200.0, places=3)
+
+        # Retry with same request_id and same payload deduplicates without double-writing
+        dup = self.assistant.diary.log_food_entries(
+            [
+                {"food_id": 460334, "grams": 150},
+                {"food_id": 72014363, "quantity": 11, "measure_name": "pieces"},
+                {"food_id": 71586518, "quantity": 200, "measure_name": "ml"},
+            ],
+            day="2026-11-21",
+            meal_group="lunch",
+            time="13:15",
+            request_id="meal-abc-1",
+        )
+        self.assertTrue(dup["already_logged"])
+
+        # Reusing same request_id for a different meal must be rejected
+        with self.assertRaises(ValidationError):
+            self.assistant.diary.log_food_entries(
+                [{"food_id": 460334, "grams": 150}],
+                day="2026-11-21",
+                request_id="meal-abc-1",
+            )
+
+        log = self.assistant.diary.get_food_log("2026-11-21", include_untracked=True)
+        self.assertEqual(log["serving_count"], 3)
+        pretzel_row = next(s for s in log["servings"] if s["food_id"] == 72014363)
+        self.assertAlmostEqual(pretzel_row["servings"], 11.0, places=2)
+        untracked_caffeine = next((n for n in log["nutrients"] if n["id"] == 262), None)
+        self.assertIsNotNone(untracked_caffeine)
+        self.assertFalse(untracked_caffeine["tracked"])
+        self.assertAlmostEqual(untracked_caffeine["amount"], 0.75, places=3)
+
+        sid = logged["logged"][0]["entry_id"]
+        edited = self.assistant.diary.edit_food_entry(
+            sid,
+            day="2026-11-21",
+            grams=200,
+            time="19:30",
+            meal_group="dinner",
+            new_day="2026-11-20",
+        )
+        self.assertEqual(edited["grams"], 200.0)
+        self.assertEqual(edited["meal_group"], "dinner")
+        self.assertEqual(edited["date"], "2026-11-20")
+
+        self.assertEqual(
+            self.assistant.diary.remove_food_entries([sid], day="2026-11-20")["count"], 1
+        )
+        self.assertEqual(
+            self.assistant.diary.remove_food_entries(
+                [logged["logged"][1]["entry_id"], logged["logged"][2]["entry_id"]],
+                day="2026-11-21",
+            )["count"],
+            2,
+        )
+        self.assertEqual(self.assistant.diary.get_food_log("2026-11-21")["serving_count"], 0)
+
+    def test_custom_food_create_update_retire_and_recipe(self):
+        created = self.assistant.custom.create_custom_food(
+            "ProFlex Bar Chocolate",
+            {
+                "אנרגיה": {"amount": 210, "unit": "kcal"},
+                "חלבון": {"amount": 20, "unit": "g"},
+                "פחמימות": {"amount": 15, "unit": "g"},
+                "סיבים תזונתיים": {"amount": 5, "unit": "g"},
+                "שומן רווי": {"amount": 3, "unit": "g"},
+                "מלח": {"amount": 0.5, "unit": "g"},
+            },
+            basis_amount=60,
+            basis_unit="g",
+            carbohydrate_basis="excludes_fiber",
+            serving_name="bar",
+            serving_grams=60,
+            category_id=5,
+            barcode="7290014760141",
+            request_id="cf-1",
+        )
+        self.assertTrue(created["verified"] and created["barcode_linked"])
+        fid = created["food_id"]
+
+        updated = self.assistant.custom.update_custom_food(
+            fid,
+            nutrients={"protein": 22},
+            basis_amount=60,
+            measures=[{"name": "half bar", "grams": 30}],
+        )
+        self.assertTrue(updated["verified"])
+        self.assertTrue(any(m["name"] == "half bar" for m in updated["measures"]))
+
+        retired = self.assistant.custom.retire_custom_food(fid, retired=True)
+        self.assertTrue(retired["retired"])
+        with self.assertRaises(ValidationError):
+            self.assistant.diary.log_food_entries([{"food_id": fid, "grams": 60}], day="2026-11-21")
+
+        recipe = self.assistant.custom.save_recipe(
+            "Cooked Rice & Pretzel Mix",
+            [
+                {"food_id": 460334, "grams": 300},
+                {"food_id": 72014363, "quantity": 22, "measure_name": "pieces"},
+            ],
+            servings=2,
+            cooked_grams=280,
+        )
+        self.assertTrue(recipe["verified"])
+        self.assertEqual(recipe["final_grams"], 280.0)
+        self.assertAlmostEqual(recipe["servings"], 2.0)
+
+        # Updating recipe servings from 2 -> 4 actually updates serving measure (140g -> 70g)
+        edited_recipe = self.assistant.custom.save_recipe(
+            "Cooked Rice & Pretzel Mix",
+            [
+                {"food_id": 460334, "grams": 300},
+                {"food_id": 72014363, "quantity": 22, "measure_name": "pieces"},
+            ],
+            servings=4,
+            cooked_grams=280,
+            recipe_id=recipe["food_id"],
+        )
+        self.assertTrue(edited_recipe["verified"])
+        self.assertAlmostEqual(edited_recipe["servings"], 4.0)
+        srv_m = next(m for m in edited_recipe["measures"] if m["name"] == "serving")
+        self.assertAlmostEqual(srv_m["grams_per_unit"], 70.0, places=2)
+
+        # Omitting servings on update preserves existing serving count (4)
+        kept_recipe = self.assistant.custom.save_recipe(
+            "Cooked Rice & Pretzel Mix v2",
+            [
+                {"food_id": 460334, "grams": 300},
+                {"food_id": 72014363, "quantity": 22, "measure_name": "pieces"},
+            ],
+            cooked_grams=280,
+            recipe_id=recipe["food_id"],
+        )
+        self.assertTrue(kept_recipe["verified"])
+        self.assertAlmostEqual(kept_recipe["servings"], 4.0)
+
+    def test_partial_batch_retry_reconciles_without_duplicating(self):
+        from cronometer_mcp.client import CronometerError
+
+        orig_add = self.assistant.diary._add_serving_row
+        calls = 0
+
+        def fail_second_after_write(**kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                # Simulate response lost AFTER Cronometer actually wrote the second item
+                orig_add(**kwargs)
+                raise httpx.ReadTimeout("simulated timeout after write")
+            return orig_add(**kwargs)
+
+        items = [
+            {"food_id": 460334, "grams": 150},
+            {"food_id": 72014363, "grams": 30},
+        ]
+        self.assistant.diary._add_serving_row = fail_second_after_write  # type: ignore[method-assign]
+        with self.assertRaises(httpx.ReadTimeout):
+            self.assistant.diary.log_food_entries(
+                items, day="2026-11-21", meal_group="lunch", time="13:00", request_id="partial-1"
+            )
+        # Restore normal writes and retry same request_id -> reconciles item 2, zero duplicates!
+        self.assistant.diary._add_serving_row = orig_add  # type: ignore[method-assign]
+        resumed = self.assistant.diary.log_food_entries(
+            items, day="2026-11-21", meal_group="lunch", time="13:00", request_id="partial-1"
+        )
+        self.assertEqual(resumed["logged_count"], 2)
+        self.assertTrue(resumed["verified"])
+        self.assertEqual(self.assistant.diary.get_food_log("2026-11-21")["serving_count"], 2)
+
+        # If a sending step never appeared in the diary, retry refuses to blindly resend
+        def fail_before_write(**kwargs):
+            raise httpx.ReadTimeout("uncertain timeout")
+
+        self.assistant.diary._add_serving_row = fail_before_write  # type: ignore[method-assign]
+        with self.assertRaises(httpx.ReadTimeout):
+            self.assistant.diary.log_food_entries(
+                [{"food_id": 460334, "grams": 100}],
+                day="2026-11-21",
+                meal_group="dinner",
+                time="19:00",
+                request_id="uncertain-1",
+            )
+        self.assistant.diary._add_serving_row = orig_add  # type: ignore[method-assign]
+        with self.assertRaises(CronometerError):
+            self.assistant.diary.log_food_entries(
+                [{"food_id": 460334, "grams": 100}],
+                day="2026-11-21",
+                meal_group="dinner",
+                time="19:00",
+                request_id="uncertain-1",
+            )
+
+    def test_readback_detects_mismatched_grams_on_log_and_edit(self):
+        self.backend.tamper_serving_grams = 1.0
+        res = self.assistant.diary.log_food_entries(
+            [{"food_id": 460334, "grams": 150}],
+            day="2026-11-21",
+            meal_group="lunch",
+            time="13:00",
+        )
+        self.assertFalse(res["verified"])
+        self.assertEqual(res["logged"][0]["grams"], 1.0)
+        self.assertIn("verification_mismatches", res)
+
+        edited = self.assistant.diary.edit_food_entry(
+            res["logged"][0]["entry_id"], day="2026-11-21", grams=200
+        )
+        self.assertFalse(edited["verified"])
+        self.assertEqual(edited["grams"], 1.0)
+        self.assertIn("verification_mismatches", edited)
+
+    def test_mcp_rename_measure_preserves_multi_unit_amount(self):
+        srv = create_server(self.assistant)
+
+        async def run():
+            res = await srv.call_tool(
+                "update_custom_food",
+                {
+                    "food_id": 72014363,
+                    "measures": [{"measure_id": 2001, "name": "pretzel rings"}],
+                },
+            )
+            text = res[0][0].text if isinstance(res, tuple) else res[0].text
+            data = json.loads(text)
+            self.assertTrue(data["ok"], data)
+            renamed = next(m for m in data["measures"] if m["measure_id"] == 2001)
+            self.assertEqual(renamed["name"], "pretzel rings")
+            self.assertEqual(renamed["amount"], 22)
+            self.assertAlmostEqual(renamed["grams_per_unit"], 30.0 / 22.0, places=4)
+
+        asyncio.run(run())
+
+    def test_always_on_server_refreshes_timezone_for_today_operations(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        self.backend.timezone = "Pacific/Niue"  # UTC-11
+        log1 = self.assistant.diary.get_food_log()
+        expected1 = datetime.now(ZoneInfo("Pacific/Niue")).date().isoformat()
+        self.assertEqual(log1["date"], expected1)
+
+        # Profile timezone changes while server stays running
+        self.backend.timezone = "Pacific/Kiritimati"  # UTC+14 (always next day vs UTC-11!)
+        log2 = self.assistant.diary.get_food_log()
+        expected2 = datetime.now(ZoneInfo("Pacific/Kiritimati")).date().isoformat()
+        self.assertEqual(log2["date"], expected2)
+        self.assertNotEqual(log1["date"], log2["date"])
+
+        # Explicit historical date remains untouched
+        hist = self.assistant.diary.get_food_log("2026-11-15")
+        self.assertEqual(hist["date"], "2026-11-15")
+
+    def test_mcp_tool_tiers_and_gemini_claude_schema_compatibility(self):
+        core_only = create_server(
+            self.assistant, include_extras=False, include_tracking=False, port=8765
+        )
+        default_srv = create_server(self.assistant)
+        full_srv = create_server(self.assistant, include_extras=True, include_tracking=True)
+
+        self.assertEqual(SESSION_IDLE_TIMEOUT, 24 * 3600)
+        self.assertEqual(core_only.settings.host, "127.0.0.1")
+        self.assertEqual(core_only.settings.port, 8765)
+
+        async def run():
+            core_tools = await core_only.list_tools()
+            default_tools = await default_srv.list_tools()
+            full_tools = await full_srv.list_tools()
+
+            self.assertEqual(len(core_tools), 19)
+            self.assertEqual(len(default_tools), 29)
+            self.assertEqual(len(full_tools), 42)
+
+            # Verify ZERO str|int anyOf unions across all 42 tools (Gemini/Claude compatibility)
+            for tool in full_tools:
+                self.assertFalse(
+                    _has_string_int_union(tool.inputSchema),
+                    f"Tool {tool.name} has a string|integer union in schema: {tool.inputSchema}",
+                )
+
+            # Round-trip a core tool and an extra tool
+            res = await default_srv.call_tool("search_foods", {"query": "אורז"})
+            text = res[0][0].text if isinstance(res, tuple) else res[0].text
+            data = json.loads(text)
+            self.assertTrue(data["ok"] and data["foods"][0]["food_id"] == 460334)
+
+            streak_res = await default_srv.call_tool("get_streak", {})
+            st_text = streak_res[0][0].text if isinstance(streak_res, tuple) else streak_res[0].text
+            st_data = json.loads(st_text)
+            self.assertTrue(st_data["ok"] and st_data["streak"]["current"] == 5)
+
+        asyncio.run(run())
+
+    def test_tunnel_launcher_helpers(self):
+        tid = "tunnel_" + "a" * 32
+        self.assertEqual(validate_tunnel_id(tid), tid)
+        with self.assertRaises(ValueError):
+            validate_tunnel_id("bad")
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("bin/tunnel-client", b"#!/bin/sh\necho ok\n")
+        payload = buf.getvalue()
+        digest = "sha256:" + hashlib.sha256(payload).hexdigest()
+
+        asset = choose_asset(
+            {
+                "tag_name": "v1.2.3",
+                "assets": [
+                    {
+                        "name": "tunnel-client-v1.2.3-linux-amd64.zip",
+                        "browser_download_url": (
+                            "https://github.com/openai/tunnel-client/releases/download/"
+                            "v1.2.3/tunnel-client-v1.2.3-linux-amd64.zip"
+                        ),
+                        "digest": digest,
+                    }
+                ],
+            },
+            "Linux",
+            "x86_64",
+        )
+        self.assertEqual(asset["digest"], digest)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "tunnel-client"
+            install_archive(payload, digest, dest)
+            self.assertTrue(dest.is_file())
+            cmd = launch_arguments(
+                dest,
+                tid,
+                Path("/usr/bin/python3"),
+                Path(tmp) / "assistant.sqlite",
+                Path(tmp) / "session.json",
+                Path(tmp) / "health.url",
+            )
+            self.assertIn("serve", " ".join(cmd))
+
+
+if __name__ == "__main__":
+    unittest.main()
