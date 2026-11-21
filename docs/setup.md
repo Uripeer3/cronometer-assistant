@@ -2,21 +2,28 @@
 
 ## 1. Connecting Your AI Client
 
-Start by setting up and testing whichever client(s) you use interactively in a terminal. Once that works, see [Section 2](#2-keeping-it-always-running-across-reboots-systemd) to keep remote clients reachable automatically after every reboot.
+Pick the row for the client you use (you can set up more than one):
 
-### ChatGPT (OpenAI MCP Tunnel)
+| AI Client | How it connects | Needs `systemd` auto-start? |
+|---|---|---|
+| **ChatGPT** (web / mobile / desktop) | OpenAI MCP Tunnel (`scripts/run_tunnel.py`) | **Yes** — [Section 2](#2-keeping-remote-clients-running-across-reboots-systemd) |
+| **Claude Code, Claude Desktop, Gemini CLI, Cursor** (local apps) | Local `stdio` (app launches the server itself) | **No** |
+| **Claude.ai web/mobile or remote Gemini** | Local `streamable-http` + your HTTPS auth proxy | **Yes** — [Section 2](#2-keeping-remote-clients-running-across-reboots-systemd) |
 
-First, create a private tunnel in [OpenAI Platform → Tunnels](https://platform.openai.com/organization/tunnels) (copy its `tunnel_…` ID) and create a runtime API key with **Tunnels Read + Use** permissions (see OpenAI's [Secure MCP Tunnels guide](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels) and [tunnel-client onboarding](https://github.com/openai/tunnel-client/blob/master/docs/onboarding.md)).
+### A. ChatGPT (OpenAI MCP Tunnel)
 
-Then run this in a terminal to save your tunnel key and connect (then select the tunnel in ChatGPT's custom MCP settings):
+Runs OpenAI's official `tunnel-client` on your computer, which launches this MCP server locally and opens an outbound connection to ChatGPT (no firewall ports needed).
 
-```bash
-python3 scripts/run_tunnel.py --tunnel-id YOUR_TUNNEL_ID --save-key
-```
+1. Create a tunnel at [OpenAI Platform → Tunnels](https://platform.openai.com/organization/tunnels) (copy its `tunnel_…` ID) and an API key with **Tunnels Read + Use** permissions ([guide](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels), [onboarding](https://github.com/openai/tunnel-client/blob/master/docs/onboarding.md)).
+2. Run in a terminal to download `tunnel-client`, save the key privately in `.runtime/tunnel-api-key`, and connect:
+   ```bash
+   python3 scripts/run_tunnel.py --tunnel-id YOUR_TUNNEL_ID --save-key
+   ```
+3. In ChatGPT's custom MCP app settings, select your tunnel and verify tools load.
 
-### Claude Code, Claude Desktop, Gemini CLI, Cursor (`stdio`)
+### B. Local Apps — Claude Code, Claude Desktop, Gemini CLI, Cursor (`stdio`)
 
-Add this to your client's MCP configuration. Local `stdio` clients start and stop the server on demand themselves, so they do not need a background service:
+Tells the app how to start this MCP server on demand whenever you chat. No background service is needed—just add this to your client's MCP config:
 
 ```json
 {
@@ -37,25 +44,27 @@ Add this to your client's MCP configuration. Local `stdio` clients start and sto
 }
 ```
 
-### Claude.ai Web/Mobile or Remote Gemini (`streamable-http`)
+### C. Remote Web/Mobile — Claude.ai or Remote Gemini (`streamable-http`)
+
+Starts this MCP server as a local HTTP endpoint at `http://127.0.0.1:8765/mcp` (24-hour idle session timeout):
 
 ```bash
 .venv/bin/python -m cronometer_assistant serve --transport streamable-http --host 127.0.0.1 --port 8765
 ```
 
-This serves MCP at `http://127.0.0.1:8765/mcp` with a 24-hour idle session timeout. Place an authenticating HTTPS proxy (such as an OAuth 2.1 proxy + Cloudflare Tunnel) in front of it—never expose `--host 0.0.0.0` directly without authentication.
+Put an authenticating HTTPS proxy (such as an OAuth 2.1 proxy + Cloudflare Tunnel) in front of it—never bind `--host 0.0.0.0` directly without authentication.
 
 ---
 
-## 2. Keeping It Always Running Across Reboots (`systemd`)
+## 2. Keeping Remote Clients Running Across Reboots (`systemd`)
 
-Remote AI clients (ChatGPT via the MCP tunnel, or web/mobile apps using `streamable-http`) can only reach your assistant while the server process is running on your computer. Running it manually in a terminal stops as soon as you close the terminal, crash, or reboot.
+*Skip this section if you only use local `stdio` apps (Option B above).*
 
-Setting up a Linux user `systemd` service starts the MCP server automatically whenever your computer powers up or restarts—and restarts it automatically if it ever exits—so your agents can always reach Cronometer as long as your computer is on, with no terminal window needed. *(Local `stdio` clients like Claude Code or Gemini CLI don't need this step.)*
+For **ChatGPT** (Option A) or **remote Claude.ai / Gemini** (Option C), the server must be running on your computer for your AI to reach Cronometer. Running it manually stops whenever you close the terminal or reboot. A Linux user `systemd` service starts it automatically on boot and restarts it on crashes—no terminal window needed.
 
-### Option A: Auto-start the ChatGPT MCP Tunnel
+### Setup for ChatGPT (MCP Tunnel)
 
-1. After running `run_tunnel.py --tunnel-id YOUR_TUNNEL_ID --save-key` once, create `.runtime/profile.yaml` (mode `0600`):
+1. After running `run_tunnel.py --tunnel-id YOUR_TUNNEL_ID --save-key` once, create `.runtime/profile.yaml` (mode `0600`) so `tunnel-client` knows your tunnel ID, saved key, and MCP command:
    ```json
    {
      "config_version": 1,
@@ -74,7 +83,7 @@ Setting up a Linux user `systemd` service starts the MCP server automatically wh
      }
    }
    ```
-2. Install `~/.config/systemd/user/cronometer-assistant.service`:
+2. Create `~/.config/systemd/user/cronometer-assistant.service`:
    ```ini
    [Unit]
    Description=Cronometer MCP assistant
@@ -93,36 +102,31 @@ Setting up a Linux user `systemd` service starts the MCP server automatically wh
    WantedBy=default.target
    ```
 
-### Option B: Auto-start `streamable-http` instead
+### Setup for Remote Claude.ai / Gemini (`streamable-http`)
 
-Use the same `~/.config/systemd/user/cronometer-assistant.service` file, replacing `ExecStart` with:
+Skip `.runtime/profile.yaml` and create the same `~/.config/systemd/user/cronometer-assistant.service` above, swapping only `ExecStart`:
 
 ```ini
 ExecStart=/abs/path/.venv/bin/python -m cronometer_assistant serve --transport streamable-http --host 127.0.0.1 --port 8765 --db /abs/path/data/assistant.sqlite --session /abs/path/data/cronometer-session/session.json
 ```
 
-### Enable, start, and manage the service
+### Enable, start, and manage (both ChatGPT & HTTP)
 
 ```bash
 systemctl --user daemon-reload
-systemctl --user enable --now cronometer-assistant.service
+systemctl --user enable --now cronometer-assistant.service   # start now & on future logins
+loginctl enable-linger "$USER"                               # optional: also start before desktop login
+```
+
+Day-to-day checks and updates:
+
+```bash
 systemctl --user status cronometer-assistant.service
-```
-
-Optional—start on boot even before you log into a desktop session:
-
-```bash
-loginctl enable-linger "$USER"
-```
-
-Useful day-to-day commands:
-
-```bash
-systemctl --user restart cronometer-assistant.service
+systemctl --user restart cronometer-assistant.service        # run after `git pull` + `uv sync`
 journalctl --user -u cronometer-assistant.service -n 50 --no-pager
 ```
 
-After updating code (`git pull --ff-only && uv sync --locked --extra mcp --extra live --no-dev`), restart the service, refresh tools in ChatGPT, and start a new chat.
+After updating code and restarting the service, refresh tools in your AI client (e.g., ChatGPT connector refresh) and start a new chat.
 
 ---
 
