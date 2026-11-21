@@ -6,7 +6,9 @@ Start by setting up and testing whichever client(s) you use interactively in a t
 
 ### ChatGPT (OpenAI MCP Tunnel)
 
-Run in a terminal to save your tunnel key and test the connection:
+First, create a private tunnel in [OpenAI Platform → Tunnels](https://platform.openai.com/organization/tunnels) (copy its `tunnel_…` ID) and create a runtime API key with **Tunnels Read + Use** permissions (see OpenAI's [Secure MCP Tunnels guide](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels) and [tunnel-client onboarding](https://github.com/openai/tunnel-client/blob/master/docs/onboarding.md)).
+
+Then run this in a terminal to save your tunnel key and connect (then select the tunnel in ChatGPT's custom MCP settings):
 
 ```bash
 python3 scripts/run_tunnel.py --tunnel-id YOUR_TUNNEL_ID --save-key
