@@ -1,7 +1,7 @@
 [project]
 name = "cronometer-assistant"
-version = "0.1.0"
-description = "Persistent, source-aware meal drafts for a conversational Cronometer assistant"
+version = "0.2.0"
+description = "Simple, thorough conversational MCP server for Cronometer nutrition logging"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = []

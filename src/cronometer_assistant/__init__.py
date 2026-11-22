@@ -1,3 +1,3 @@
-"""Conversational meal logging domain and MCP tools."""
+"""Conversational Cronometer MCP assistant."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
