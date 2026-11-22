@@ -73,11 +73,12 @@ Running `run_tunnel.py` in a terminal stops whenever you close the window or reb
 Runs this MCP server as a local HTTP endpoint (`http://127.0.0.1:8765/mcp`, 24-hour idle session timeout) behind your own authenticating HTTPS proxy.
 
 **Connect:**
-1. Start the HTTP server:
+1. Start the local HTTP server:
    ```bash
    .venv/bin/python -m cronometer_assistant serve --transport streamable-http --host 127.0.0.1 --port 8765
    ```
-2. Expose `http://127.0.0.1:8765/mcp` through an authenticating HTTPS proxy (such as an OAuth 2.1 proxy + Cloudflare Tunnel) and add that URL in Claude.ai or Gemini. Never bind `--host 0.0.0.0` directly without authentication.
+2. Put an OAuth 2.1 proxy in front of `http://127.0.0.1:8765/mcp` (see the [MCP Authorization guide](https://modelcontextprotocol.io/docs/concepts/authorization) or [`rollecode/cronometer-mcp`](https://github.com/rollecode/cronometer-mcp)'s `auth-server.js` + Nginx example) and expose it over HTTPS (for example via [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/get-started/)). Never bind `--host 0.0.0.0` directly without authentication.
+3. Add your HTTPS `/mcp` URL as a custom connector in Claude.ai ([Remote MCP docs](https://platform.claude.com/docs/en/agents-and-tools/remote-mcp-servers)) or Gemini.
 
 **Keep running after reboots (optional, Linux `systemd`):**
 To keep the HTTP server up automatically whenever your computer powers on or restarts, create `~/.config/systemd/user/cronometer-assistant.service` using the same `[Unit]` / `[Install]` sections as above with:
