@@ -575,6 +575,84 @@ class DiaryService:
             response["verification_mismatches"] = all_mismatches
         return response
 
+    @staticmethod
+    def _fmt_grams(value: float) -> str:
+        return f"{round(value, 4):.4f}".rstrip("0").rstrip(".")
+
+    @classmethod
+    def _check_same_meal_duplicates(
+        cls,
+        *,
+        planned: list[dict[str, Any]],
+        diary_rows: list[dict[str, Any]],
+        foods_by_id: dict[int, dict[str, Any]],
+        target_day: date,
+    ) -> None:
+        """Refuse accidental same-food duplicates in the same meal group with edit hints."""
+        existing_by_key: dict[tuple[int, int], list[dict[str, Any]]] = {}
+        for row in diary_rows:
+            if not isinstance(row, dict) or row.get("type") != "Serving":
+                continue
+            fid = row.get("foodId")
+            if type(fid) is not int:
+                continue
+            gid = (row.get("order") or 0) >> 16
+            existing_by_key.setdefault((fid, gid), []).append(row)
+
+        conflicts: list[str] = []
+        day_iso = target_day.isoformat()
+        for step in planned:
+            fid = step["food_id"]
+            gid = step["group_id"]
+            matches = existing_by_key.get((fid, gid))
+            if not matches:
+                continue
+            raw_food = foods_by_id[fid]
+            group_name = ID_TO_MEAL_GROUP.get(gid, f"group_{gid}")
+            add_grams = float(step["grams"])
+            if len(matches) == 1:
+                row = matches[0]
+                sid = row.get("servingId")
+                _, _, _, existing_grams = serving_scale_and_display(raw_food, row)
+                time_str = f" at {row['time']}" if row.get("time") else ""
+                if existing_grams is not None:
+                    combined = existing_grams + add_grams
+                    conflicts.append(
+                        f"{step['food_name']!r} (food_id={fid}) is already in {group_name} on "
+                        f"{day_iso} as entry_id={sid} ({cls._fmt_grams(existing_grams)} g"
+                        f"{time_str}); call edit_food_entry(entry_id={sid}, "
+                        f"date={day_iso!r}, grams={cls._fmt_grams(combined)}) to add "
+                        f"{cls._fmt_grams(add_grams)} g to it"
+                    )
+                else:
+                    conflicts.append(
+                        f"{step['food_name']!r} (food_id={fid}) is already in {group_name} on "
+                        f"{day_iso} as entry_id={sid}{time_str}; "
+                        f"call edit_food_entry(entry_id={sid}, date={day_iso!r}, ...) to update it"
+                    )
+            else:
+                parts: list[str] = []
+                for row in matches:
+                    sid = row.get("servingId")
+                    _, _, _, existing_grams = serving_scale_and_display(raw_food, row)
+                    g_str = (
+                        f"{cls._fmt_grams(existing_grams)} g" if existing_grams is not None else "?"
+                    )
+                    t_str = f" at {row['time']}" if row.get("time") else ""
+                    parts.append(f"entry_id={sid} ({g_str}{t_str})")
+                conflicts.append(
+                    f"{step['food_name']!r} (food_id={fid}) already has {len(matches)} entries in "
+                    f"{group_name} on {day_iso}: {', '.join(parts)}; "
+                    f"edit an existing entry with edit_food_entry"
+                )
+
+        if conflicts:
+            raise ValidationError(
+                "Same-meal duplicate policy: "
+                + "; ".join(conflicts)
+                + ". Or retry log_food_entries with allow_duplicate=True if a separate line is genuinely intended."
+            )
+
     def log_food_entries(
         self,
         entries: list[dict[str, Any]],
@@ -583,6 +661,7 @@ class DiaryService:
         meal_group: str | int = "auto",
         time: str | None = None,
         request_id: str | None = None,
+        allow_duplicate: bool = False,
     ) -> dict[str, Any]:
         """Log one or more food servings in a single validated, read-back-verified operation."""
         if not isinstance(entries, list) or not entries or len(entries) > 50:
@@ -599,6 +678,7 @@ class DiaryService:
         with self._op_lock():
             journal_steps: list[dict[str, Any]] | None = None
             target_day: date | None = None
+            existing_op: dict[str, Any] | None = None
 
             if request_id and self.state:
                 existing_op = self.state.get_operation(
@@ -630,6 +710,20 @@ class DiaryService:
                     step["wall_time"] = resolved_now
                 if step["group_id"] is None:
                     step["group_id"] = meal_group_for_hour(step["wall_time"].hour)
+
+            before_diary: dict[str, Any] | None = None
+            if existing_op is None and not allow_duplicate:
+                before_diary = self.client.get_diary(target_day)
+                if not isinstance(before_diary, dict) or not isinstance(
+                    before_diary.get("diary"), list
+                ):
+                    raise CronometerError("Cronometer returned an invalid diary payload")
+                self._check_same_meal_duplicates(
+                    planned=planned,
+                    diary_rows=before_diary["diary"],
+                    foods_by_id=foods_by_id,
+                    target_day=target_day,
+                )
 
             if request_id and self.state and journal_steps is None:
                 journal_steps = [
@@ -663,7 +757,9 @@ class DiaryService:
 
             known_ids: set[int] = set()
             if journal_steps is not None and any(s["status"] == "pending" for s in journal_steps):
-                before = self.client.get_diary(target_day)
+                before = (
+                    before_diary if before_diary is not None else self.client.get_diary(target_day)
+                )
                 known_ids = {
                     e["servingId"]
                     for e in before.get("diary", [])

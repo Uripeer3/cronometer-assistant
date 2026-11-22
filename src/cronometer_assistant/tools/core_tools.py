@@ -165,11 +165,18 @@ def register_core_tools(
         meal_group: str = "auto",
         time: str | None = None,
         request_id: str | None = None,
+        allow_duplicate: bool = False,
     ) -> str:
         """Log one or more foods to Cronometer in a single read-back-verified call.
 
         `meal_group`: auto, breakfast, lunch, dinner, snacks, uncategorized, or '0'..'8'.
         Each entry takes `grams` OR `quantity` + `measure_id`/`measure_name`.
+        Policy: when adding more of a food already logged in the same meal group on that date,
+        edit the existing entry with `edit_food_entry` to the new total instead of adding another
+        line. By default (`allow_duplicate=False`), this tool refuses same-food duplicates in the
+        same meal group and returns the existing `entry_id`, grams, and combined total so you can
+        call `edit_food_entry`; set `allow_duplicate=True` only when a separate line is genuinely
+        intended (e.g., separate snacks at different times or explicitly requested).
         """
         return run(
             assistant.diary.log_food_entries,
@@ -178,6 +185,7 @@ def register_core_tools(
             meal_group=meal_group,
             time=time,
             request_id=request_id,
+            allow_duplicate=allow_duplicate,
         )
 
     @mcp.tool(annotations=IDEMPOTENT_WRITE)
@@ -192,7 +200,11 @@ def register_core_tools(
         meal_group: str | None = None,
         new_date: str | None = None,
     ) -> str:
-        """Edit any logged serving's amount, measure, time, meal group ('breakfast'/'lunch'/'dinner'/'snacks'/'uncategorized'/'0'..'8'), or date."""
+        """Edit any logged serving's amount, measure, time, meal group ('breakfast'/'lunch'/'dinner'/'snacks'/'uncategorized'/'0'..'8'), or date.
+
+        Prefer this over `log_food_entries` when adding more of a food already logged in the same
+        meal — pass the new combined `grams` (or `quantity`).
+        """
         return run(
             assistant.diary.edit_food_entry,
             entry_id,
