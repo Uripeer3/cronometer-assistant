@@ -242,7 +242,9 @@ def resolve_serving_amount(
         raise ValidationError("Provide either `grams` OR `quantity` (not both)")
 
     measures = [m for m in raw_food.get("measures", []) if isinstance(m, dict) and m.get("id")]
-    is_native_recipe = bool(raw_food.get("meal"))
+    is_native_recipe = bool(raw_food.get("meal")) or any(
+        m.get("type") == "Recipe" for m in measures
+    )
 
     def _find_measure() -> dict[str, Any] | None:
         if measure_id is not None:

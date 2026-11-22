@@ -118,9 +118,22 @@ def meal_group_for_hour(hour: int) -> int:
     return 4
 
 
+def is_batch_recipe(raw_food: dict[str, Any]) -> bool:
+    """True when Cronometer stores this recipe's nutrients per full batch (not per 100 g).
+
+    Covers both `meal=True` recipes and Cronometer-app servings-based recipes whose
+    measures use `type == "Recipe"` (even when `meal` is False).
+    """
+    if raw_food.get("meal"):
+        return True
+    return any(
+        isinstance(m, dict) and m.get("type") == "Recipe" for m in raw_food.get("measures", [])
+    )
+
+
 def native_recipe_total_grams(raw_food: dict[str, Any]) -> float | None:
-    """Total batch weight in grams for a native (`meal=True`) recipe, or None for normal foods."""
-    if not raw_food.get("meal"):
+    """Total batch weight in grams for a batch-stored (`Recipe`-measure / `meal=True`) recipe."""
+    if not is_batch_recipe(raw_food):
         return None
     total = sum(
         float(i.get("grams") or 0) for i in raw_food.get("ingredients", []) if isinstance(i, dict)
@@ -139,9 +152,10 @@ def per_100g_nutrient_factor(raw_food: dict[str, Any]) -> float | None:
     """Multiplier converting raw_food['nutrients'] amounts to per-100g values.
 
     Normal foods and weight-based recipes already store nutrients per 100 g (factor = 1.0).
-    Native recipes (`meal=True`) store nutrients per full batch (factor = 100 / batch_grams).
+    Batch-stored recipes (`meal=True` or `Recipe`-typed measures) store nutrients per full
+    batch (factor = 100 / batch_grams).
     """
-    if not raw_food.get("meal"):
+    if not is_batch_recipe(raw_food):
         return 1.0
     total = native_recipe_total_grams(raw_food)
     if total is None or total <= 0:
@@ -168,7 +182,9 @@ def extract_key_macros(raw_food: dict[str, Any], scale: float | None = None) -> 
 
 
 def is_recipe_food(raw_food: dict[str, Any]) -> bool:
-    if raw_food.get("meal"):
+    if is_batch_recipe(raw_food):
+        return True
+    if raw_food.get("ingredients"):
         return True
     props = raw_food.get("properties")
     return isinstance(props, dict) and str(props.get("advancedServingSize", "")).lower() == "true"
@@ -210,7 +226,7 @@ def serving_scale_and_display(
         if isinstance(grams, (int, float)) and gpu and gpu > 0:
             servings = round(float(grams) / gpu, 4)
 
-    if raw_food.get("meal") and isinstance(grams, (int, float)):
+    if is_batch_recipe(raw_food) and isinstance(grams, (int, float)):
         total_grams = native_recipe_total_grams(raw_food)
         if total_grams and total_grams > 0:
             if (

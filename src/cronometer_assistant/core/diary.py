@@ -21,6 +21,7 @@ from ..parsing import (
     extract_energy_summary,
     extract_key_macros,
     format_api_time,
+    is_batch_recipe,
     is_recipe_food,
     meal_group_for_hour,
     parse_day,
@@ -94,7 +95,7 @@ class DiaryService:
             mismatches.append(f"grams: expected {expected_grams}, observed {actual_grams}")
         if (
             expected_measure_id is not None
-            and not raw_food.get("meal")
+            and not is_batch_recipe(raw_food)
             and obs_measure_id != expected_measure_id
         ):
             mismatches.append(

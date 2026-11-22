@@ -18,7 +18,12 @@ from ..nutrition import (
     finite_number,
     resolve_serving_amount,
 )
-from ..parsing import extract_key_macros, per_100g_nutrient_factor
+from ..parsing import (
+    extract_key_macros,
+    is_batch_recipe,
+    is_recipe_food,
+    per_100g_nutrient_factor,
+)
 from ..state import AssistantState
 
 _RAW_SUMMARY_RE = re.compile(r"Raw ingredients \(([\d.]+) g\):")
@@ -38,6 +43,14 @@ class RecipeService:
     @staticmethod
     def _existing_weight_recipe_cooked_grams(existing_food: dict[str, Any]) -> float | None:
         """Detect if an existing weight recipe has a persisted cooked weight distinct from raw."""
+        props = existing_food.get("properties") or {}
+        if isinstance(props, dict) and props.get("cooked_weight") is not None:
+            try:
+                cw = float(props["cooked_weight"])
+                if math.isfinite(cw) and cw > 0:
+                    return cw
+            except (TypeError, ValueError):
+                pass
         full_m = next(
             (
                 m
@@ -228,7 +241,7 @@ class RecipeService:
         """Update a servings-based (`meal=True`) recipe while preserving all existing measure IDs."""
         updated = deepcopy(existing_food)
         updated["name"] = name
-        updated["meal"] = True
+        updated["meal"] = bool(existing_food.get("meal"))
         updated["ingredients"] = rows
         updated["nutrients"] = []
         if notes is not None:
@@ -347,14 +360,11 @@ class RecipeService:
                 existing_food = self.client.get_food(recipe_id)
                 if existing_food.get("owner") != self.client.user_id:
                     raise ValidationError(f"Recipe {recipe_id} is not yours to edit")
-                is_weight = (
-                    str(existing_food.get("properties", {}).get("advancedServingSize", "")).lower()
-                    == "true"
-                )
-                if not existing_food.get("meal") and not is_weight:
+                if not is_recipe_food(existing_food):
                     raise ValidationError(
                         f"Food {recipe_id} is not a recipe; use update_custom_food instead"
                     )
+                is_weight = not is_batch_recipe(existing_food)
                 if is_weight:
                     if effective_cooked_grams is None:
                         effective_cooked_grams = self._existing_weight_recipe_cooked_grams(
@@ -422,7 +432,7 @@ class RecipeService:
                 mismatches.append(
                     f"servings: expected {effective_servings}, observed {observed_servings}"
                 )
-            if not fresh.get("meal"):
+            if not is_batch_recipe(fresh):
                 full_m = next(
                     (
                         m

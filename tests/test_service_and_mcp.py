@@ -1160,6 +1160,106 @@ class ServiceAndMCPTests(unittest.TestCase):
         self.assertIsNotNone(hist_s["servings"][0]["measure"])
         self.assertIn(hist_s["servings"][0]["measure"]["measure_id"], s_orig_mids.values())
 
+    def test_app_created_recipes_report_is_recipe_and_resolved_ingredients(self):
+        # Real Cronometer app weight recipe: meal=False, advancedServingSize="false", cooked_weight
+        self.backend.foods[71766482] = {
+            "id": 71766482,
+            "name": "FODMAP Paprica Chicken",
+            "source": "Custom",
+            "category": 15,
+            "owner": 1001,
+            "retired": False,
+            "meal": False,
+            "labelType": "AMERICAN_2016",
+            "defaultMeasureId": 254047223,
+            "barcodes": [],
+            "properties": {"advancedServingSize": "false", "cooked_weight": "450.0"},
+            "measures": [
+                {
+                    "id": 254047222,
+                    "name": "full recipe",
+                    "type": "Weight",
+                    "amount": 1,
+                    "value": 450,
+                },
+                {"id": 254047224, "name": "Serving", "type": "Weight", "amount": 1, "value": 120},
+                {"id": 254047223, "name": "g", "type": "Weight", "amount": 1, "value": 1},
+            ],
+            "ingredients": [
+                {"foodId": 460334, "measureId": 1048861, "grams": 600.0},
+                {"foodId": 72014363, "measureId": 2002, "grams": 30.0},
+            ],
+            "nutrients": [
+                {"id": 208, "amount": 252.38},
+                {"id": 203, "amount": 29.5},
+            ],
+        }
+        # Real Cronometer app servings recipe: meal=False, Recipe-typed measures, batch nutrients!
+        self.backend.foods[72144024] = {
+            "id": 72144024,
+            "name": "Simple Rice",
+            "source": "Custom",
+            "category": 12,
+            "owner": 1001,
+            "retired": False,
+            "meal": False,
+            "labelType": "AMERICAN_2016",
+            "defaultMeasureId": 721440242,
+            "barcodes": [],
+            "properties": {"advancedServingSize": "false"},
+            "measures": [
+                {"id": 721440241, "name": "g", "type": "Recipe", "amount": 1, "value": 400.0},
+                {"id": 721440242, "name": "Serving", "type": "Recipe", "amount": 1, "value": 2},
+                {"id": 721440243, "name": "full recipe", "type": "Recipe", "amount": 1, "value": 1},
+            ],
+            "ingredients": [{"foodId": 460334, "measureId": 1048861, "grams": 400.0}],
+            "nutrients": [
+                {"id": 208, "amount": 520.0},
+                {"id": 203, "amount": 10.8},
+            ],
+        }
+
+        # get_my_foods classifies BOTH app recipe shapes accurately
+        mine = self.assistant.foods.get_my_foods(include_recent=False, include_aliases=False)
+        by_id = {f["food_id"]: f for f in mine["custom_foods"]}
+        self.assertTrue(by_id[71766482]["is_recipe"])
+        self.assertEqual(by_id[71766482]["serving_type"], "weight")
+        self.assertEqual(by_id[71766482]["ingredient_count"], 2)
+        self.assertTrue(by_id[72144024]["is_recipe"])
+        self.assertEqual(by_id[72144024]["serving_type"], "servings")
+
+        # get_food_details returns resolved ingredients + cooked_weight for weight app recipe
+        chick = self.assistant.foods.get_food_details(71766482)
+        self.assertTrue(chick["is_recipe"])
+        self.assertEqual(chick["serving_type"], "weight")
+        self.assertAlmostEqual(chick["cooked_weight_grams"], 450.0)
+        self.assertAlmostEqual(chick["raw_ingredients_grams"], 630.0)
+        self.assertEqual(len(chick["ingredients"]), 2)
+        self.assertEqual(
+            chick["ingredients"][0]["food_name"], "White Rice, Cooked in Unsalted Water"
+        )
+        self.assertAlmostEqual(chick["macros_per_100g"]["energy_kcal"], 252.38, places=2)
+
+        # get_food_details returns resolved ingredients + per-100g (not batch!) macros for servings app recipe
+        rice = self.assistant.foods.get_food_details(72144024)
+        self.assertTrue(rice["is_recipe"])
+        self.assertEqual(rice["serving_type"], "servings")
+        self.assertAlmostEqual(rice["macros_per_100g"]["energy_kcal"], 130.0, places=2)
+        self.assertEqual(rice["ingredients"][0]["food_id"], 460334)
+
+        # Weight recipe created via save_recipe (ingredients in comments) also resolves ingredients
+        saved = self.assistant.recipes.save_recipe(
+            "Saved Weight Mix",
+            [{"food_id": 460334, "grams": 200}, {"food_id": 72014363, "grams": 30}],
+            servings=2,
+        )
+        saved_details = self.assistant.foods.get_food_details(saved["food_id"])
+        self.assertTrue(saved_details["is_recipe"])
+        self.assertEqual(len(saved_details["ingredients"]), 2)
+        self.assertEqual(
+            saved_details["ingredients"][0]["food_name"], "White Rice, Cooked in Unsalted Water"
+        )
+
     def test_mcp_tool_tiers_and_gemini_claude_schema_compatibility(self):
         core_only = create_server(
             self.assistant, include_extras=False, include_tracking=False, port=8765

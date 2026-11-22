@@ -132,7 +132,7 @@ def register_core_tools(
 
     @mcp.tool(annotations=READ)
     def get_food_details(food_id: int) -> str:
-        """Inspect complete measures, barcodes, category, label type, and all nutrients for a food."""
+        """Inspect complete metadata, measures, barcodes, recipe ingredients, and all nutrients for a food or recipe."""
         return run(assistant.foods.get_food_details, food_id)
 
     @mcp.tool(annotations=READ)

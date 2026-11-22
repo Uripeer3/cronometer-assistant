@@ -20,6 +20,7 @@ from ..nutrition import (
     normalize_label_nutrients,
     validate_barcode,
 )
+from ..parsing import is_batch_recipe
 from ..state import AssistantState
 
 RESERVED_GRAM_NAMES = frozenset({"g", "gram", "grams"})
@@ -323,7 +324,7 @@ class CustomFoodService:
             food = self.client.get_food(food_id)
             if food.get("owner") != self.client.user_id:
                 raise ValidationError(f"Food {food_id} is not one of your custom foods")
-            if food.get("meal"):
+            if is_batch_recipe(food):
                 raise ValidationError(
                     f"Food {food_id} is a servings-based recipe; use save_recipe instead"
                 )

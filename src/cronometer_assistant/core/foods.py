@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from ..auth import CronometerSessionClient, validate_timezone
 from ..nutrition import ValidationError, clean_text, extract_measures, normalize_key
-from ..parsing import extract_key_macros, is_recipe_food, per_100g_nutrient_factor
+from ..parsing import (
+    extract_key_macros,
+    is_batch_recipe,
+    is_recipe_food,
+    per_100g_nutrient_factor,
+)
 from ..state import AssistantState
+
+_COMMENT_ING_RE = re.compile(r"([\d.]+)\s*g\s+of\s+food\s+(\d+)")
 
 
 class FoodService:
@@ -81,8 +89,131 @@ class FoodService:
             "foods": foods,
         }
 
+    def _extract_recipe_ingredients(
+        self, raw: dict[str, Any]
+    ) -> tuple[list[dict[str, Any]], float | None]:
+        """Resolve recipe ingredients (native list or weight-recipe notes summary) with food names."""
+        raw_ings = [i for i in (raw.get("ingredients") or []) if isinstance(i, dict)]
+        parsed_from_notes: list[tuple[int, float]] = []
+        if not raw_ings and is_recipe_food(raw):
+            comments = str(raw.get("comments") or "")
+            if "Raw ingredients (" in comments:
+                for grams_s, fid_s in _COMMENT_ING_RE.findall(comments):
+                    try:
+                        parsed_from_notes.append((int(fid_s), float(grams_s)))
+                    except ValueError:
+                        continue
+
+        if raw_ings:
+            ing_fids = sorted(
+                {
+                    i["foodId"]
+                    for i in raw_ings
+                    if isinstance(i.get("foodId"), int) and i["foodId"] > 0
+                }
+            )
+            foods_by_id = (
+                {
+                    f["id"]: f
+                    for f in self.client.get_foods(ing_fids)
+                    if isinstance(f, dict) and f.get("id")
+                }
+                if ing_fids
+                else {}
+            )
+            out: list[dict[str, Any]] = []
+            total = 0.0
+            for row in raw_ings:
+                fid = row.get("foodId")
+                ing_food = foods_by_id.get(fid, {})
+                mid = row.get("measureId")
+                measure_name = next(
+                    (
+                        m.get("name")
+                        for m in ing_food.get("measures", [])
+                        if isinstance(m, dict) and m.get("id") == mid
+                    ),
+                    None,
+                )
+                grams = row.get("grams")
+                if isinstance(grams, (int, float)):
+                    total += float(grams)
+                out.append(
+                    {
+                        "food_id": fid,
+                        "food_name": ing_food.get("name"),
+                        "grams": round(float(grams), 2)
+                        if isinstance(grams, (int, float))
+                        else None,
+                        "measure_id": mid,
+                        "measure_name": measure_name,
+                    }
+                )
+            return out, round(total, 2) if total > 0 else None
+
+        if parsed_from_notes:
+            ing_fids = sorted({fid for fid, _ in parsed_from_notes})
+            foods_by_id = {
+                f["id"]: f
+                for f in self.client.get_foods(ing_fids)
+                if isinstance(f, dict) and f.get("id")
+            }
+            out = [
+                {
+                    "food_id": fid,
+                    "food_name": foods_by_id.get(fid, {}).get("name"),
+                    "grams": round(grams, 2),
+                }
+                for fid, grams in parsed_from_notes
+            ]
+            total = sum(grams for _, grams in parsed_from_notes)
+            return out, round(total, 2) if total > 0 else None
+
+        return [], None
+
+    def _list_own_foods(self, query: str = "") -> list[dict[str, Any]]:
+        """List owned custom foods & recipes with accurate recipe detection (incl. app recipes)."""
+        rows = self.client._request(
+            "/api/v2/find_food",
+            {
+                "query": query,
+                "tab": "CUSTOM",
+                "sources": ["All"],
+                "config": {"newSearch": True, "newSpellcheck": True, "call_version": 1},
+            },
+        ).get("foods", [])
+        ids = [r["id"] for r in rows if isinstance(r, dict) and isinstance(r.get("id"), int)]
+        details = (
+            {f["id"]: f for f in self.client.get_foods(ids) if isinstance(f, dict) and f.get("id")}
+            if ids
+            else {}
+        )
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            detail = details.get(row.get("id"), {})
+            if bool(detail.get("retired")):
+                continue
+            recipe = is_recipe_food(detail)
+            serving_type = ("servings" if is_batch_recipe(detail) else "weight") if recipe else None
+            item: dict[str, Any] = {
+                "food_id": row.get("id"),
+                "name": row.get("name"),
+                "measure_id": row.get("measureId"),
+                "measure_name": row.get("measureDisplayName"),
+                "is_recipe": recipe,
+                "serving_type": serving_type,
+                "retired": False,
+                "notes": detail.get("comments"),
+            }
+            if recipe and detail.get("ingredients"):
+                item["ingredient_count"] = len(detail["ingredients"])
+            out.append(item)
+        return out
+
     def get_food_details(self, food_id: int) -> dict[str, Any]:
-        """Inspect complete metadata, measures, and nutrients for a single food."""
+        """Inspect complete metadata, measures, recipe ingredients, and nutrients for a food."""
         if type(food_id) is not int or food_id <= 0:
             raise ValidationError("food_id must be a positive integer")
         raw = self.client.get_food(food_id)
@@ -121,7 +252,9 @@ class FoodService:
                     }
                 )
 
-        return {
+        recipe = is_recipe_food(raw)
+        serving_type = ("servings" if is_batch_recipe(raw) else "weight") if recipe else None
+        out: dict[str, Any] = {
             "food_id": raw["id"],
             "name": raw.get("name"),
             "source": raw.get("source"),
@@ -129,7 +262,8 @@ class FoodService:
             "label_type": raw.get("labelType"),
             "notes": raw.get("comments"),
             "barcodes": raw.get("barcodes") or [],
-            "is_recipe": is_recipe_food(raw),
+            "is_recipe": recipe,
+            "serving_type": serving_type,
             "is_custom": raw.get("owner") == self.client.user_id,
             "retired": bool(raw.get("retired")),
             "default_measure_id": raw.get("defaultMeasureId"),
@@ -139,6 +273,18 @@ class FoodService:
             "nutrients_per_100g": nutrients_per_100g,
             "missing_fields_are_unknown": True,
         }
+        if recipe:
+            ingredients, raw_ing_grams = self._extract_recipe_ingredients(raw)
+            out["ingredients"] = ingredients
+            if raw_ing_grams is not None:
+                out["raw_ingredients_grams"] = raw_ing_grams
+            cooked_prop = (raw.get("properties") or {}).get("cooked_weight")
+            if cooked_prop is not None:
+                try:
+                    out["cooked_weight_grams"] = round(float(cooked_prop), 2)
+                except (TypeError, ValueError):
+                    pass
+        return out
 
     def get_my_foods(
         self,
@@ -162,7 +308,7 @@ class FoodService:
             result["recent_foods"] = recent
 
         if include_custom:
-            result["custom_foods"] = self.client.list_own_foods(query.strip())
+            result["custom_foods"] = self._list_own_foods(query.strip())
 
         return result
 
