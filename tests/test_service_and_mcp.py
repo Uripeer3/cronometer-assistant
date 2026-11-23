@@ -1603,49 +1603,15 @@ class ServiceAndMCPTests(unittest.TestCase):
         self.assertFalse(bad_replay["verified"])
         self.assertAlmostEqual(bad_replay["logged"][0]["grams"], 10000.0, places=1)
 
-    def test_legacy_v1_journals_replay_safely_across_upgrade(self):
-        # Seed a legacy (90e00e2) completed meal record using the old unprefixed resolved-steps hash
-        legacy_meal_fp = hashlib.sha256(
-            json.dumps(
-                {
-                    "day": "2026-11-22",
-                    "steps": [
-                        {
-                            "food_id": 460334,
-                            "measure_id": 1048859,
-                            "grams": 158.0,
-                            "translation_id": 0,
-                            "group_id": 2,
-                            "wall_time": "13:00:00",
-                        }
-                    ],
-                },
-                sort_keys=True,
-            ).encode()
-        ).hexdigest()
+    def test_pre_v2_journal_record_fails_safely_with_status(self):
+        # A pre-v2 (unprefixed) SQLite journal row surfaces its saved status instead of silently
+        # overwriting or re-running Cronometer writes.
         self.state.save_idempotent(
             "legacy-meal-1",
             "log_food_entries",
-            {
-                "date": "2026-11-22",
-                "logged_count": 1,
-                "logged": [{"entry_id": 7777, "food_id": 460334, "grams": 158.0}],
-                "verified": True,
-                "already_logged": False,
-            },
-            fingerprint=legacy_meal_fp,
+            {"date": "2026-11-22", "logged": [{"entry_id": 7777}], "verified": True},
+            fingerprint="a" * 64,
         )
-        replayed = self.assistant.diary.log_food_entries(
-            [{"food_id": 460334, "quantity": 1, "measure_name": "cup"}],
-            day="2026-11-22",
-            meal_group="lunch",
-            time="13:00",
-            request_id="legacy-meal-1",
-        )
-        self.assertTrue(replayed["already_logged"])
-        self.assertEqual(replayed["logged"][0]["entry_id"], 7777)
-
-        # If a legacy key can't be matched (e.g. different payload), surface saved entry_ids instead of advising a fresh key
         with self.assertRaises(ValidationError) as ctx:
             self.assistant.diary.log_food_entries(
                 [{"food_id": 460334, "grams": 99}],
@@ -1654,51 +1620,8 @@ class ServiceAndMCPTests(unittest.TestCase):
                 time="13:00",
                 request_id="legacy-meal-1",
             )
-        self.assertIn("7777", str(ctx.exception))
-
-        # Seed a legacy (90e00e2) custom-food record (unprefixed hash omitting notes)
-        legacy_cf_fp = hashlib.sha256(
-            json.dumps(
-                {
-                    "name": "Legacy Bar",
-                    "category_id": 0,
-                    "barcode": None,
-                    "label_type": "EU",
-                    "measures": [
-                        {
-                            "id": 0,
-                            "name": "serving",
-                            "value": 100.0,
-                            "amount": 1.0,
-                            "type": "Weight",
-                        },
-                        {"id": 0, "name": "g", "value": 1.0, "amount": 1.0, "type": "Weight"},
-                    ],
-                    "nutrients": [
-                        {"id": 203, "amount": 15.0},
-                        {"id": 205, "amount": 25.0},
-                        {"id": 208, "amount": 200.0},
-                        {"id": 291, "amount": 5.0},
-                    ],
-                },
-                sort_keys=True,
-            ).encode()
-        ).hexdigest()
-        self.state.save_idempotent(
-            "legacy-cf-1",
-            "create_custom_food",
-            {"food_id": 9123, "name": "Legacy Bar", "verified": True, "already_created": False},
-            fingerprint=legacy_cf_fp,
-        )
-        cf_replay = self.assistant.custom.create_custom_food(
-            "Legacy Bar",
-            {"energy": 200, "protein": 15, "carbs": 20, "fiber": 5},
-            carbohydrate_basis="excludes_fiber",
-            notes="same food",
-            request_id="legacy-cf-1",
-        )
-        self.assertTrue(cf_replay["already_created"])
-        self.assertEqual(cf_replay["food_id"], 9123)
+        self.assertIn("earlier version", str(ctx.exception))
+        self.assertIn("completed", str(ctx.exception))
 
     def test_batch_recipe_unknown_weight_legacy_atomic_and_metadata_only_edits(self):
         # 1) Unknown-weight 4-serving Recipe-measure batch
@@ -2197,20 +2120,13 @@ class ServiceAndMCPTests(unittest.TestCase):
             self.assertEqual(find_cached_client(runtime_dir, version="v1.2.3"), dest)
             self.assertIsNone(find_cached_client(runtime_dir, version="v1.2.4"))
 
-            # acquire_client reuses cached verified binary without hitting GitHub on restarts
+            # acquire_client reuses cached binary without hitting GitHub on restarts
             with patch(
                 "scripts.run_tunnel.read_public_url",
                 side_effect=AssertionError("should not access network when cached binary exists"),
             ):
                 reused = acquire_client(runtime_dir)
                 self.assertEqual(reused, dest)
-
-            # Tampering with the cached binary or writing non-object metadata invalidates cache cleanly
-            dest.write_bytes(b"#!/bin/sh\necho tampered\n")
-            self.assertIsNone(find_cached_client(runtime_dir))
-            self.assertIsNone(find_cached_client(runtime_dir, version="v1.2.3"))
-            dest.with_suffix(".meta.json").write_text("[]", encoding="utf-8")
-            self.assertIsNone(find_cached_client(runtime_dir, version="v1.2.3"))
 
             # Symlinked version directory must be rejected on install without touching its target
             outside = runtime_dir / "outside"

@@ -56,7 +56,7 @@ Running `run_tunnel.py` in a terminal stops whenever you close the window or reb
    [Service]
    Type=simple
    WorkingDirectory=/abs/path
-   ExecStart=/abs/path/.runtime/tunnel-client run --profile-file /abs/path/.runtime/profile.yaml
+   ExecStart=/abs/path/.runtime/vX.Y.Z/tunnel-client run --profile-file /abs/path/.runtime/profile.yaml
    Restart=on-failure
    RestartSec=10
    UMask=0077

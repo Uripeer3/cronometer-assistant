@@ -139,15 +139,6 @@ def choose_asset(release: dict, system: str, machine: str) -> dict:
     return asset
 
 
-def _ensure_safe_install_paths(destination: Path) -> None:
-    meta_path = destination.with_suffix(".meta.json")
-    for path in (destination.parent.parent, destination.parent, destination, meta_path):
-        if path.is_symlink():
-            raise ValueError(f"Refusing to install tunnel-client through symbolic link: {path}")
-    if destination.parent.exists() and not destination.parent.is_dir():
-        raise ValueError(f"Tunnel-client version path is not a directory: {destination.parent}")
-
-
 def install_archive(payload: bytes, digest: str, destination: Path) -> None:
     if "sha256:" + hashlib.sha256(payload).hexdigest() != digest:
         raise ValueError("Tunnel-client archive checksum mismatch")
@@ -160,9 +151,9 @@ def install_archive(payload: bytes, digest: str, destination: Path) -> None:
         if len(members) != 1 or members[0].file_size > MAX_DOWNLOAD:
             raise ValueError("Unexpected tunnel-client archive contents")
         executable = archive.read(members[0])
-    _ensure_safe_install_paths(destination)
+    if destination.parent.is_symlink() or destination.is_symlink():
+        raise ValueError(f"Refusing to install tunnel-client through symbolic link: {destination}")
     destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    _ensure_safe_install_paths(destination)
     with tempfile.NamedTemporaryFile(dir=destination.parent, delete=False) as output:
         tmp = Path(output.name)
         try:
@@ -173,24 +164,6 @@ def install_archive(payload: bytes, digest: str, destination: Path) -> None:
             os.replace(tmp, destination)
         finally:
             tmp.unlink(missing_ok=True)
-    meta = {
-        "sha256": hashlib.sha256(executable).hexdigest(),
-        "system": platform.system(),
-        "machine": platform.machine(),
-    }
-    meta_path = destination.with_suffix(".meta.json")
-    with tempfile.NamedTemporaryFile(
-        mode="w", encoding="utf-8", dir=destination.parent, delete=False
-    ) as meta_out:
-        tmp_meta = Path(meta_out.name)
-        try:
-            os.fchmod(meta_out.fileno(), 0o600)
-            json.dump(meta, meta_out, sort_keys=True)
-            meta_out.flush()
-            os.fsync(meta_out.fileno())
-            os.replace(tmp_meta, meta_path)
-        finally:
-            tmp_meta.unlink(missing_ok=True)
 
 
 def validate_client_version(value: str) -> str:
@@ -199,50 +172,26 @@ def validate_client_version(value: str) -> str:
     return value
 
 
-def _is_verified_cached_binary(version_dir: Path) -> Path | None:
+def _cached_binary(version_dir: Path) -> Path | None:
     if not version_dir.is_dir() or version_dir.is_symlink():
         return None
     candidate = version_dir / "tunnel-client"
-    meta_path = candidate.with_suffix(".meta.json")
-    if (
-        not candidate.is_file()
-        or candidate.is_symlink()
-        or not os.access(candidate, os.X_OK)
-        or not meta_path.is_file()
-        or meta_path.is_symlink()
-    ):
-        return None
-    try:
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        if not isinstance(meta, dict):
-            return None
-        expected_hash = meta.get("sha256")
-        if (
-            not isinstance(expected_hash, str)
-            or meta.get("system") != platform.system()
-            or meta.get("machine") != platform.machine()
-        ):
-            return None
-        actual_hash = hashlib.sha256(candidate.read_bytes()).hexdigest()
-    except (OSError, ValueError):
-        return None
-    return candidate if actual_hash == expected_hash else None
+    if candidate.is_file() and not candidate.is_symlink() and os.access(candidate, os.X_OK):
+        return candidate
+    return None
 
 
 def find_cached_client(folder: Path, *, version: str | None = None) -> Path | None:
-    """Return an already-installed, digest-verified tunnel-client binary without network access."""
+    """Return an already-installed tunnel-client binary without network access."""
     if not folder.is_dir() or folder.is_symlink():
         return None
     if version is not None:
-        tag = validate_client_version(version)
-        return _is_verified_cached_binary(folder / tag)
+        return _cached_binary(folder / validate_client_version(version))
     cached: list[tuple[tuple[int, int, int], Path]] = []
     for entry in folder.iterdir():
         match = VERSION_TAG_RE.fullmatch(entry.name)
-        if not match:
-            continue
-        candidate = _is_verified_cached_binary(entry)
-        if candidate is not None:
+        candidate = _cached_binary(entry) if match else None
+        if match and candidate is not None:
             semver = (int(match.group(1)), int(match.group(2)), int(match.group(3)))
             cached.append((semver, candidate))
     if not cached:

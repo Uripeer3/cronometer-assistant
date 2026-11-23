@@ -155,7 +155,6 @@ class AssistantState:
         action: str,
         *,
         fingerprint: str | None = None,
-        verify_fingerprint: bool = True,
     ) -> dict[str, Any] | None:
         key = clean_text(request_id, "request_id", 200)
         with self._conn() as db:
@@ -169,12 +168,12 @@ class AssistantState:
             raise ValidationError(
                 f"request_id {key!r} was already used for a different action ({row['action']})"
             )
-        if (
-            verify_fingerprint
-            and fingerprint is not None
-            and row["fingerprint"]
-            and row["fingerprint"] != fingerprint
-        ):
+        if fingerprint is not None and row["fingerprint"] and row["fingerprint"] != fingerprint:
+            if not row["fingerprint"].startswith("v2:"):
+                raise ValidationError(
+                    f"request_id {key!r} already exists from an earlier version "
+                    f"(status={row['status']}); check Cronometer before retrying with a new request_id"
+                )
             raise ValidationError(
                 f"request_id {key!r} was already used for a different request payload; "
                 "use a new request_id for a different meal or food"

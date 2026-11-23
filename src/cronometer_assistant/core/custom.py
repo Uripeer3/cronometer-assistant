@@ -11,7 +11,7 @@ from typing import Any
 
 from cronometer_mcp.client import CronometerError
 
-from ..auth import AuthError, CronometerSessionClient, SessionExpiredError
+from ..auth import CronometerSessionClient
 from ..nutrition import (
     ValidationError,
     clean_text,
@@ -55,6 +55,7 @@ class CustomFoodService:
         expected_category: int | None = None,
         expected_label_type: str | None = None,
         expected_barcode: str | None = None,
+        expected_notes: str | None = None,
         expected_measures: list[dict[str, Any]] | None = None,
         expected_nutrients: list[dict[str, Any]] | None = None,
     ) -> tuple[bool, list[str]]:
@@ -74,6 +75,10 @@ class CustomFoodService:
             barcodes = fresh.get("barcodes") or []
             if expected_barcode not in barcodes:
                 mismatches.append(f"barcode: expected {expected_barcode!r} in {barcodes!r}")
+        if expected_notes is not None and fresh.get("comments") != expected_notes:
+            mismatches.append(
+                f"notes: expected {expected_notes!r}, observed {fresh.get('comments')!r}"
+            )
 
         fresh_measures = [m for m in fresh.get("measures", []) if isinstance(m, dict)]
         by_id = {m.get("id"): m for m in fresh_measures if m.get("id")}
@@ -159,6 +164,7 @@ class CustomFoodService:
             expected_category=int(record["expected_category"]),
             expected_label_type=record["expected_label_type"],
             expected_barcode=record.get("expected_barcode"),
+            expected_notes=record.get("expected_notes"),
             expected_measures=record["expected_measures"],
             expected_nutrients=record["expected_nutrients"],
         )
@@ -290,61 +296,11 @@ class CustomFoodService:
         )
 
         with self._op_lock():
-            normalized: dict[str, Any] | None = None
             if request_id and self.state:
                 existing_op = self.state.get_operation(
-                    request_id, "create_custom_food", verify_fingerprint=False
+                    request_id, "create_custom_food", fingerprint=fingerprint
                 )
                 if existing_op is not None:
-                    saved_fp = existing_op["fingerprint"]
-                    if saved_fp and saved_fp != fingerprint:
-                        if saved_fp.startswith("v2:"):
-                            raise ValidationError(
-                                f"request_id {request_id!r} was already used for a different request payload; "
-                                "use a new request_id for a different meal or food"
-                            )
-                        # Legacy pre-v2 journal record (unprefixed sha256 over normalized payload)
-                        legacy_match = False
-                        try:
-                            normalized = normalize_label_nutrients(
-                                nutrients,
-                                self.client.nutrient_index(),
-                                basis_amount=basis_val,
-                                basis_unit=basis_unit,
-                                carbohydrate_basis=carbohydrate_basis,
-                                density_g_per_ml=density_val,
-                            )
-                            legacy_fp = hashlib.sha256(
-                                json.dumps(
-                                    {
-                                        "name": food_name,
-                                        "category_id": category_id,
-                                        "barcode": valid_barcode,
-                                        "label_type": normalized["label_type"],
-                                        "measures": measures,
-                                        "nutrients": normalized["nutrients_wire"],
-                                    },
-                                    sort_keys=True,
-                                ).encode()
-                            ).hexdigest()
-                            legacy_match = legacy_fp == saved_fp
-                        except (SessionExpiredError, AuthError):
-                            raise
-                        except Exception:
-                            legacy_match = False
-                        if not legacy_match:
-                            saved_data = existing_op["data"]
-                            saved_fid = saved_data.get("food_id")
-                            detail = (
-                                f"food_id={saved_fid}"
-                                if saved_fid
-                                else f"name={saved_data.get('name')!r}"
-                            )
-                            raise ValidationError(
-                                f"Legacy request_id {request_id!r} (status={existing_op['status']}, "
-                                f"{detail}) did not match this payload; check get_my_foods before "
-                                "creating another food"
-                            ) from None
                     if existing_op["status"] == "completed":
                         return {**existing_op["data"], "already_created": True}
                     if existing_op["status"] == "created" and existing_op["data"].get("food_id"):
@@ -356,15 +312,14 @@ class CustomFoodService:
                         "uncertain outcome. Check get_my_foods before creating another food."
                     )
 
-            if normalized is None:
-                normalized = normalize_label_nutrients(
-                    nutrients,
-                    self.client.nutrient_index(),
-                    basis_amount=basis_val,
-                    basis_unit=basis_unit,
-                    carbohydrate_basis=carbohydrate_basis,
-                    density_g_per_ml=density_val,
-                )
+            normalized = normalize_label_nutrients(
+                nutrients,
+                self.client.nutrient_index(),
+                basis_amount=basis_val,
+                basis_unit=basis_unit,
+                carbohydrate_basis=carbohydrate_basis,
+                density_g_per_ml=density_val,
+            )
 
             if request_id and self.state:
                 self.state.save_operation(
@@ -407,6 +362,7 @@ class CustomFoodService:
                 "expected_category": category_id,
                 "expected_label_type": normalized["label_type"],
                 "expected_barcode": valid_barcode,
+                "expected_notes": notes,
                 "expected_measures": measures,
                 "expected_nutrients": normalized["nutrients_wire"],
                 "srv_name": srv_name,
@@ -584,6 +540,7 @@ class CustomFoodService:
                 expected_category=expected_category,
                 expected_label_type=expected_label_type,
                 expected_barcode=expected_barcode,
+                expected_notes=notes,
                 expected_measures=expected_measures or None,
                 expected_nutrients=expected_nutrients,
             )

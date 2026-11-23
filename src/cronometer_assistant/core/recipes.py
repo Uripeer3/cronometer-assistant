@@ -87,11 +87,6 @@ class RecipeService:
         return None
 
     @staticmethod
-    def _extract_user_notes(comments: str | None) -> str | None:
-        """Preserve any user notes prefix above the auto-generated Raw ingredients block."""
-        return extract_weight_recipe_user_notes(comments)
-
-    @staticmethod
     def _sum_weight_recipe_nutrients(
         rows: list[dict[str, Any]],
         foods_by_id: dict[int, dict[str, Any]],
@@ -150,7 +145,7 @@ class RecipeService:
             notes
             if notes is not None
             else (
-                self._extract_user_notes(existing_food.get("comments"))
+                extract_weight_recipe_user_notes(existing_food.get("comments"))
                 if existing_food is not None
                 else None
             )
@@ -375,7 +370,7 @@ class RecipeService:
                             f"unexpected nutrient {nid}: expected absent/0, observed {obs_amt}"
                         )
             if expected_notes is not None:
-                obs_notes = self._extract_user_notes(fresh.get("comments"))
+                obs_notes = extract_weight_recipe_user_notes(fresh.get("comments"))
                 exp_clean = expected_notes.strip() or None
                 if obs_notes != exp_clean:
                     mismatches.append(f"notes: expected {exp_clean!r}, observed {obs_notes!r}")
@@ -470,28 +465,31 @@ class RecipeService:
                 }
             )
 
-        fingerprint = hashlib.sha256(
-            json.dumps(
-                {
-                    "name": recipe_name,
-                    "recipe_id": recipe_id,
-                    "serving_type": serving_type,
-                    "servings": srv_count,
-                    "cooked_grams": cooked_grams,
-                    "notes": notes,
-                    "ingredients": [
-                        {
-                            **ing,
-                            "measure_name": ing["measure_name"].casefold()
-                            if ing["measure_name"] is not None
-                            else None,
-                        }
-                        for ing in normalized_input_ings
-                    ],
-                },
-                sort_keys=True,
-            ).encode()
-        ).hexdigest()
+        fingerprint = (
+            "v2:"
+            + hashlib.sha256(
+                json.dumps(
+                    {
+                        "name": recipe_name,
+                        "recipe_id": recipe_id,
+                        "serving_type": serving_type,
+                        "servings": srv_count,
+                        "cooked_grams": cooked_grams,
+                        "notes": notes,
+                        "ingredients": [
+                            {
+                                **ing,
+                                "measure_name": ing["measure_name"].casefold()
+                                if ing["measure_name"] is not None
+                                else None,
+                            }
+                            for ing in normalized_input_ings
+                        ],
+                    },
+                    sort_keys=True,
+                ).encode()
+            ).hexdigest()
+        )
 
         with self._op_lock():
             if request_id and self.state:
@@ -550,21 +548,20 @@ class RecipeService:
                         f"Food {recipe_id} is not a recipe; use update_custom_food instead"
                     )
                 is_weight = not is_batch_recipe(existing_food)
-                if is_weight:
-                    if effective_cooked_grams is None:
-                        effective_cooked_grams = self._existing_weight_recipe_cooked_grams(
-                            existing_food
-                        )
-                    existing_final = float(effective_cooked_grams or total_grams)
-                    existing_servings = recipe_servings(existing_food, existing_final)
-                    effective_servings = srv_count if srv_count is not None else existing_servings
-                else:
-                    if cooked_grams is not None:
-                        raise ValidationError(
-                            "cooked_grams applies to weight-based recipes only; this recipe is servings-based"
-                        )
-                    existing_servings = recipe_servings(existing_food, total_grams)
-                    effective_servings = srv_count if srv_count is not None else existing_servings
+                if is_weight and effective_cooked_grams is None:
+                    effective_cooked_grams = self._existing_weight_recipe_cooked_grams(
+                        existing_food
+                    )
+                if not is_weight and cooked_grams is not None:
+                    raise ValidationError(
+                        "cooked_grams applies to weight-based recipes only; this recipe is servings-based"
+                    )
+                final_total = float(effective_cooked_grams or total_grams)
+                effective_servings = (
+                    srv_count
+                    if srv_count is not None
+                    else recipe_servings(existing_food, final_total if is_weight else total_grams)
+                )
             else:
                 effective_servings = srv_count if srv_count is not None else 1.0
                 is_weight = serving_type == "weight"
@@ -572,10 +569,10 @@ class RecipeService:
                     raise ValidationError(
                         "cooked_grams applies to weight-based recipes only; use serving_type='weight'"
                     )
+                final_total = float(effective_cooked_grams or total_grams)
 
-            # Build and preflight-check payloads BEFORE writing status='sending' so no local
-            # error (missing nutrients or measure-ID preservation) can strand request_id.
-            final_total = float(effective_cooked_grams or total_grams)
+            # Build and validate payloads BEFORE writing status='sending' so local errors
+            # never strand request_id.
             expected_nutrients: list[dict[str, Any]] | None = None
             payload_to_save: dict[str, Any] | None = None
             if is_weight:
@@ -603,23 +600,6 @@ class RecipeService:
                     servings=effective_servings,
                     notes=notes,
                 )
-
-            if payload_to_save is not None and existing_food is not None:
-                req_ids = {
-                    int(m["id"])
-                    for m in existing_food.get("measures", [])
-                    if isinstance(m, dict) and isinstance(m.get("id"), int) and m["id"] > 0
-                }
-                got_ids = {
-                    int(m["id"])
-                    for m in payload_to_save.get("measures", [])
-                    if isinstance(m, dict) and isinstance(m.get("id"), int) and m["id"] > 0
-                }
-                missing_ids = sorted(req_ids - got_ids)
-                if missing_ids:
-                    raise ValidationError(
-                        f"Refusing recipe update that drops existing measure IDs: {missing_ids}"
-                    )
 
             if request_id and self.state:
                 self.state.save_operation(
@@ -668,7 +648,7 @@ class RecipeService:
                 "result": result,
                 "expected_name": recipe_name,
                 "expected_servings": effective_servings,
-                "expected_final_grams": float(effective_cooked_grams or total_grams),
+                "expected_final_grams": final_total,
                 "expected_rows": rows,
                 "expected_nutrients": expected_nutrients,
                 "expected_notes": notes,

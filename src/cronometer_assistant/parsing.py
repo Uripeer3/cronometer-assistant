@@ -250,43 +250,26 @@ def batch_recipe_wire_units(
         raise ValidationError(
             f"Recipe {raw_food.get('id')} has no known batch weight, so gram conversion is unavailable"
         )
-    measures = [m for m in raw_food.get("measures", []) if isinstance(m, dict)]
-    chosen = next(
-        (
-            m
-            for m in measures
-            if m.get("type") == "Recipe"
-            and str(m.get("name", "")).casefold() == "full recipe"
-            and isinstance(m.get("value"), (int, float))
-            and m["value"] > 0
-        ),
-        None,
-    )
-    if chosen is None and measure_id is not None:
-        chosen = next(
-            (
-                m
-                for m in measures
-                if m.get("id") == measure_id
-                and m.get("type") == "Recipe"
-                and isinstance(m.get("value"), (int, float))
-                and m["value"] > 0
-            ),
-            None,
-        )
-    if chosen is None:
-        chosen = next(
-            (
-                m
-                for m in measures
-                if m.get("type") == "Recipe"
-                and isinstance(m.get("value"), (int, float))
-                and m["value"] > 0
-            ),
-            None,
-        )
-    if chosen is None:
+    recipe_measures = [
+        m
+        for m in raw_food.get("measures", [])
+        if isinstance(m, dict)
+        and m.get("type") == "Recipe"
+        and isinstance(m.get("value"), (int, float))
+        and m["value"] > 0
+    ]
+    if not recipe_measures:
         raise ValidationError(f"Recipe {raw_food.get('id')} has no usable Recipe measure")
+    chosen = (
+        next(
+            (m for m in recipe_measures if str(m.get("name", "")).casefold() == "full recipe"), None
+        )
+        or next(
+            (m for m in recipe_measures if measure_id is not None and m.get("id") == measure_id),
+            None,
+        )
+        or recipe_measures[0]
+    )
     return int(chosen.get("id") or 0), total / float(chosen["value"])
 
 

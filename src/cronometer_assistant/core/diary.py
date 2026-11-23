@@ -549,30 +549,22 @@ class DiaryService:
             )
         return planned, foods_by_id
 
-    @staticmethod
-    def _legacy_v1_log_fingerprint(planned: list[dict[str, Any]], explicit_day: date | None) -> str:
-        """Compute the pre-v2 fingerprint format written by commit 90e00e2 for upgrade compatibility."""
-        return hashlib.sha256(
-            json.dumps(
-                {
-                    "day": explicit_day.isoformat() if explicit_day is not None else None,
-                    "steps": [
-                        {
-                            "food_id": s["food_id"],
-                            "measure_id": s["measure_id"],
-                            "grams": s["grams"],
-                            "translation_id": s["translation_id"],
-                            "group_id": s["group_id"],
-                            "wall_time": s["wall_time"].isoformat(timespec="seconds")
-                            if s["wall_time"]
-                            else None,
-                        }
-                        for s in planned
-                    ],
-                },
-                sort_keys=True,
-            ).encode()
-        ).hexdigest()
+    @classmethod
+    def _verify_step(
+        cls, row: dict[str, Any], step: dict[str, Any], raw_food: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        return cls._verify_serving_row(
+            row,
+            raw_food,
+            expected_food_id=step["food_id"],
+            expected_grams=step["grams"],
+            expected_measure_id=step["wire_measure_id"],
+            expected_group_id=step["group_id"],
+            expected_time=step["wall_time"],
+            expected_wire_grams=step["wire_grams"],
+            expected_grams_per_wire_unit=step.get("grams_per_wire_unit"),
+            expected_is_batch_recipe=step.get("is_batch_recipe"),
+        )
 
     def _reconcile_sending_steps(
         self,
@@ -601,18 +593,7 @@ class DiaryService:
                 sid = row.get("servingId")
                 if sid in baseline or sid in claimed:
                     continue
-                check = self._verify_serving_row(
-                    row,
-                    raw_food,
-                    expected_food_id=step["food_id"],
-                    expected_grams=step["grams"],
-                    expected_measure_id=step["wire_measure_id"],
-                    expected_group_id=step["group_id"],
-                    expected_time=step["wall_time"],
-                    expected_wire_grams=step["wire_grams"],
-                    expected_grams_per_wire_unit=step.get("grams_per_wire_unit"),
-                    expected_is_batch_recipe=step.get("is_batch_recipe"),
-                )
+                check = self._verify_step(row, step, raw_food)
                 if check["verified"]:
                     candidates.append(sid)
                 elif check["food_id"] == step["food_id"] and (
@@ -678,19 +659,7 @@ class DiaryService:
         all_mismatches: list[dict[str, Any]] = []
         for idx, step in enumerate(planned):
             row = by_sid[step["entry_id"]]
-            raw_food = foods_by_id.get(step["food_id"])
-            check = self._verify_serving_row(
-                row,
-                raw_food,
-                expected_food_id=step["food_id"],
-                expected_grams=step["grams"],
-                expected_measure_id=step["wire_measure_id"],
-                expected_group_id=step["group_id"],
-                expected_time=step["wall_time"],
-                expected_wire_grams=step["wire_grams"],
-                expected_grams_per_wire_unit=step.get("grams_per_wire_unit"),
-                expected_is_batch_recipe=step.get("is_batch_recipe"),
-            )
+            check = self._verify_step(row, step, foods_by_id.get(step["food_id"]))
             if not check["verified"]:
                 all_verified = False
                 all_mismatches.append(
@@ -749,90 +718,35 @@ class DiaryService:
             target_day: date | None = None
             planned: list[dict[str, Any]] | None = None
             foods_by_id: dict[int, dict[str, Any]] = {}
-            op_fingerprint = fingerprint
 
             if request_id and self.state:
                 existing_op = self.state.get_operation(
-                    request_id, "log_food_entries", verify_fingerprint=False
+                    request_id, "log_food_entries", fingerprint=fingerprint
                 )
                 if existing_op is not None:
-                    saved_fp = existing_op["fingerprint"]
-                    if saved_fp and saved_fp != fingerprint:
-                        if saved_fp.startswith("v2:"):
-                            raise ValidationError(
-                                f"request_id {request_id!r} was already used for a different request payload; "
-                                "use a new request_id for a different meal or food"
-                            )
-                        # Legacy pre-v2 journal record written before input-based fingerprints
-                        legacy_match = False
-                        try:
-                            planned, foods_by_id = self._resolve_planned_entries(normalized_inputs)
-                            legacy_fp = self._legacy_v1_log_fingerprint(planned, explicit_day)
-                            legacy_match = legacy_fp == saved_fp
-                        except (SessionExpiredError, AuthError):
-                            raise
-                        except Exception:
-                            planned = None
-                            foods_by_id = {}
-                        if not legacy_match:
-                            saved_data = existing_op["data"]
-                            saved_day = saved_data.get("date") or saved_data.get("day")
-                            saved_ids = [
-                                item.get("entry_id")
-                                for item in (
-                                    saved_data.get("logged") or saved_data.get("steps") or []
-                                )
-                                if isinstance(item, dict) and item.get("entry_id") is not None
-                            ]
-                            raise ValidationError(
-                                f"Legacy request_id {request_id!r} (status={existing_op['status']}, "
-                                f"date={saved_day}, entry_ids={saved_ids}) could not be matched to "
-                                "this payload; check get_food_log before retrying"
-                            ) from None
-                        op_fingerprint = saved_fp
-
                     if existing_op["status"] == "completed":
                         return {**existing_op["data"], "already_logged": True}
                     target_day = date.fromisoformat(existing_op["data"]["day"])
                     journal_steps = existing_op["data"]["steps"]
-                    if all(
-                        "wire_grams" in jstep
-                        and "wire_measure_id" in jstep
-                        and "grams_per_wire_unit" in jstep
-                        and "grams" in jstep
-                        and "food_id" in jstep
+                    planned = [
+                        {
+                            "food_id": jstep["food_id"],
+                            "food_name": jstep.get("food_name"),
+                            "measure_id": jstep["measure_id"],
+                            "measure_name": jstep.get("measure_name"),
+                            "grams": float(jstep["grams"]),
+                            "wire_measure_id": jstep["wire_measure_id"],
+                            "wire_grams": float(jstep["wire_grams"]),
+                            "grams_per_wire_unit": float(jstep["grams_per_wire_unit"]),
+                            "is_batch_recipe": bool(jstep.get("is_batch_recipe", False)),
+                            "translation_id": jstep.get("translation_id", 0),
+                            "group_id": jstep.get("group_id"),
+                            "wall_time": parse_time(jstep["wall_time"])
+                            if jstep.get("wall_time") is not None
+                            else None,
+                        }
                         for jstep in journal_steps
-                    ):
-                        # Self-contained v2 journal: recover strictly from persisted wire plan + diary
-                        # without hitting get_foods or reinterpreting historical rows via current catalog.
-                        planned = [
-                            {
-                                "food_id": jstep["food_id"],
-                                "food_name": jstep.get("food_name"),
-                                "measure_id": jstep["measure_id"],
-                                "measure_name": jstep.get("measure_name"),
-                                "grams": float(jstep["grams"]),
-                                "wire_measure_id": jstep["wire_measure_id"],
-                                "wire_grams": float(jstep["wire_grams"]),
-                                "grams_per_wire_unit": float(jstep["grams_per_wire_unit"]),
-                                "is_batch_recipe": bool(jstep.get("is_batch_recipe", False)),
-                                "translation_id": jstep.get("translation_id", 0),
-                                "group_id": jstep.get("group_id"),
-                                "wall_time": parse_time(jstep["wall_time"])
-                                if jstep.get("wall_time") is not None
-                                else None,
-                            }
-                            for jstep in journal_steps
-                        ]
-                        foods_by_id = {}
-                    else:
-                        if planned is None:
-                            planned, foods_by_id = self._resolve_planned_entries(normalized_inputs)
-                        for step, jstep in zip(planned, journal_steps, strict=True):
-                            if jstep.get("wall_time") is not None:
-                                step["wall_time"] = parse_time(jstep["wall_time"])
-                            if jstep.get("group_id") is not None:
-                                step["group_id"] = jstep["group_id"]
+                    ]
 
             if planned is None:
                 planned, foods_by_id = self._resolve_planned_entries(normalized_inputs)
@@ -856,20 +770,10 @@ class DiaryService:
             if request_id and self.state and journal_steps is None:
                 journal_steps = [
                     {
+                        **s,
                         "status": "pending",
                         "entry_id": None,
                         "baseline_ids": [],
-                        "food_id": s["food_id"],
-                        "food_name": s["food_name"],
-                        "measure_id": s["measure_id"],
-                        "measure_name": s["measure_name"],
-                        "grams": s["grams"],
-                        "wire_measure_id": s["wire_measure_id"],
-                        "wire_grams": s["wire_grams"],
-                        "grams_per_wire_unit": s["grams_per_wire_unit"],
-                        "is_batch_recipe": s["is_batch_recipe"],
-                        "translation_id": s["translation_id"],
-                        "group_id": s["group_id"],
                         "wall_time": s["wall_time"].isoformat(timespec="seconds"),
                     }
                     for s in planned
@@ -877,7 +781,7 @@ class DiaryService:
                 self.state.save_operation(
                     request_id,
                     "log_food_entries",
-                    fingerprint=op_fingerprint,
+                    fingerprint=fingerprint,
                     status="in_progress",
                     data={"day": target_day.isoformat(), "steps": journal_steps},
                 )
@@ -890,7 +794,7 @@ class DiaryService:
                     foods_by_id=foods_by_id,
                     target_day=target_day,
                     request_id=request_id,
-                    fingerprint=op_fingerprint,
+                    fingerprint=fingerprint,
                 )
 
             known_ids: set[int] = set()
@@ -916,12 +820,10 @@ class DiaryService:
                 if jstep is not None and request_id and self.state:
                     jstep["status"] = "sending"
                     jstep["baseline_ids"] = sorted(known_ids)
-                    jstep["group_id"] = step["group_id"]
-                    jstep["wall_time"] = step["wall_time"].isoformat(timespec="seconds")
                     self.state.save_operation(
                         request_id,
                         "log_food_entries",
-                        fingerprint=op_fingerprint,
+                        fingerprint=fingerprint,
                         status="in_progress",
                         data={"day": target_day.isoformat(), "steps": journal_steps},
                     )
@@ -950,7 +852,7 @@ class DiaryService:
                     self.state.save_operation(
                         request_id,
                         "log_food_entries",
-                        fingerprint=op_fingerprint,
+                        fingerprint=fingerprint,
                         status="in_progress",
                         data={"day": target_day.isoformat(), "steps": journal_steps},
                     )
@@ -963,7 +865,7 @@ class DiaryService:
             )
             if request_id and self.state and response["verified"]:
                 self.state.save_idempotent(
-                    request_id, "log_food_entries", response, fingerprint=op_fingerprint
+                    request_id, "log_food_entries", response, fingerprint=fingerprint
                 )
             return response
 
