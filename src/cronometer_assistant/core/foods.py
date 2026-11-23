@@ -2,20 +2,18 @@
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
-from ..auth import CronometerSessionClient, validate_timezone
+from ..auth import CronometerSessionClient
 from ..nutrition import ValidationError, clean_text, extract_measures, normalize_key
 from ..parsing import (
     extract_key_macros,
     is_batch_recipe,
     is_recipe_food,
+    parse_weight_recipe_ingredient_footer,
     per_100g_nutrient_factor,
 )
 from ..state import AssistantState
-
-_COMMENT_ING_RE = re.compile(r"([\d.]+)\s*g\s+of\s+food\s+(\d+)")
 
 
 class FoodService:
@@ -28,11 +26,7 @@ class FoodService:
     def check_connection(self) -> dict[str, Any]:
         """Verify live Cronometer auth, refresh account timezone, and read key nutrition prefs."""
         profile = self.client.get_profile()
-        tz = validate_timezone(profile.get("timezone"))
-        if tz != self.client._timezone:
-            self.client._timezone = tz
-            self.client._save_cached_session()
-        self.client._tz_synced = True
+        tz = self.client.apply_profile_timezone(profile.get("timezone"))
 
         prefs: dict[str, Any] = {}
         for item in profile.get("prefs") or []:
@@ -94,15 +88,11 @@ class FoodService:
     ) -> tuple[list[dict[str, Any]], float | None]:
         """Resolve recipe ingredients (native list or weight-recipe notes summary) with food names."""
         raw_ings = [i for i in (raw.get("ingredients") or []) if isinstance(i, dict)]
-        parsed_from_notes: list[tuple[int, float]] = []
-        if not raw_ings and is_recipe_food(raw):
-            comments = str(raw.get("comments") or "")
-            if "Raw ingredients (" in comments:
-                for grams_s, fid_s in _COMMENT_ING_RE.findall(comments):
-                    try:
-                        parsed_from_notes.append((int(fid_s), float(grams_s)))
-                    except ValueError:
-                        continue
+        parsed_from_notes = (
+            parse_weight_recipe_ingredient_footer(raw.get("comments"))
+            if not raw_ings and is_recipe_food(raw)
+            else []
+        )
 
         if raw_ings:
             ing_fids = sorted(
@@ -173,7 +163,7 @@ class FoodService:
 
     def _list_own_foods(self, query: str = "") -> list[dict[str, Any]]:
         """List owned custom foods & recipes with accurate recipe detection (incl. app recipes)."""
-        rows = self.client._request(
+        rows = self.client.request_v2(
             "/api/v2/find_food",
             {
                 "query": query,

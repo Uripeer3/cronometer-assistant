@@ -7,7 +7,7 @@ from typing import Any
 
 from ..auth import CronometerSessionClient
 from ..nutrition import ValidationError, clean_text
-from ..parsing import parse_day, serving_scale_and_display
+from ..parsing import is_batch_recipe, parse_day, serving_scale_and_display
 
 MAX_SCAN_DAYS = 90
 
@@ -73,7 +73,9 @@ class DiaryExtrasService:
             )
         entries = self.client.find_entries_by_food(food_id, start=start, end=end)
         raw_food = self.client.get_food(food_id)
+        batch_recipe = is_batch_recipe(raw_food)
         normalized_entries: list[dict[str, Any]] = []
+        unknown_weight_count = 0
         for entry in entries:
             row_like = {
                 "foodId": food_id,
@@ -84,15 +86,28 @@ class DiaryExtrasService:
             item = dict(entry)
             if actual_grams is not None:
                 item["grams"] = round(actual_grams, 2)
+            elif batch_recipe:
+                item["grams"] = None
+                unknown_weight_count += 1
             normalized_entries.append(item)
-        return {
+        known_grams = [
+            float(e["grams"])
+            for e in normalized_entries
+            if isinstance(e.get("grams"), (int, float))
+        ]
+        result: dict[str, Any] = {
             "food_id": food_id,
             "start_date": start.isoformat(),
             "end_date": end.isoformat(),
             "count": len(normalized_entries),
-            "total_grams": round(sum(float(e.get("grams") or 0) for e in normalized_entries), 2),
+            "total_grams": round(sum(known_grams), 2)
+            if known_grams or unknown_weight_count == 0
+            else None,
             "entries": normalized_entries,
         }
+        if unknown_weight_count:
+            result["unknown_weight_entries"] = unknown_weight_count
+        return result
 
     def add_note(self, text: str, *, day: str | None = None) -> dict[str, Any]:
         """Add a diary note to a day (Cronometer supports editing notes, not deleting them)."""

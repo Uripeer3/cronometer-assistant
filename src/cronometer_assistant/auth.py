@@ -15,7 +15,9 @@ import stat
 import sys
 import tempfile
 import threading
+from datetime import date
 from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from cronometer_mcp.client import CronometerClient, CronometerError
@@ -232,19 +234,46 @@ class CronometerSessionClient(CronometerClient):
         with self._lock:
             return super()._request_v3(method, path, json_body=json_body, _retried=_retried)
 
-    def sync_timezone(self, *, force: bool = True) -> str:
-        """Refresh the account timezone from Cronometer's profile and persist if changed."""
+    @property
+    def account_timezone(self) -> str | None:
+        return self._timezone
+
+    def apply_profile_timezone(self, response_tz: str | None) -> str:
+        """Validate, cache, and persist a timezone returned from Cronometer's profile."""
         with self._lock:
-            if not force and self._tz_synced and self._timezone:
-                return self._timezone
-            profile = self.get_profile()
-            tz = validate_timezone(profile.get("timezone"))
+            tz = validate_timezone(response_tz)
             changed = tz != self._timezone
             self._timezone = tz
             self._tz_synced = True
             if changed and self._user_id is not None and self._token is not None:
                 self._save_cached_session()
             return tz
+
+    def sync_timezone(self, *, force: bool = True) -> str:
+        """Refresh the account timezone from Cronometer's profile and persist if changed."""
+        with self._lock:
+            if not force and self._tz_synced and self._timezone:
+                return self._timezone
+            profile = self.get_profile()
+            return self.apply_profile_timezone(profile.get("timezone"))
+
+    # Narrow adapter boundary over upstream cronometer_mcp private helpers
+    def request_v2(self, endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._request(endpoint, payload)
+
+    def save_food(self, food: dict[str, Any], *, keep_measures: bool = True) -> dict[str, Any]:
+        return self._save_food(food, keep_measures=keep_measures)
+
+    def normalise_ingredients(
+        self, ingredients: list[dict[str, Any]]
+    ) -> tuple[list[dict[str, Any]], float]:
+        return self._normalise_ingredients(ingredients)
+
+    def format_day(self, day: date | None = None) -> str:
+        return self._format_day(day)
+
+    def tzinfo(self) -> ZoneInfo:
+        return self._tzinfo()
 
     def close(self) -> None:
         self._http.close()

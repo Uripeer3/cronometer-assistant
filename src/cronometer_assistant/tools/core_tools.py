@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any, Literal
 
 from mcp.server.fastmcp import FastMCP
@@ -109,41 +109,41 @@ class DraftItemInput(BaseModel):
 
 
 def register_core_tools(
-    mcp: FastMCP, assistant: CronometerAssistant, run: Callable[..., str]
+    mcp: FastMCP, assistant: CronometerAssistant, run: Callable[..., Awaitable[str]]
 ) -> None:
     """Register the 19 core food, diary, custom-food, recipe, alias, and draft tools."""
 
     # --- Read & Discovery ---
 
     @mcp.tool(annotations=READ)
-    def check_connection() -> str:
+    async def check_connection() -> str:
         """Verify live Cronometer connectivity, account timezone, today's date, and key prefs."""
-        return run(assistant.foods.check_connection)
+        return await run(assistant.foods.check_connection)
 
     @mcp.tool(annotations=READ)
-    def get_food_log(date: str | None = None, include_untracked: bool = True) -> str:
+    async def get_food_log(date: str | None = None, include_untracked: bool = True) -> str:
         """Get a full diary day: all logged foods, calorie target/remaining, and full nutrient totals."""
-        return run(assistant.diary.get_food_log, date, include_untracked=include_untracked)
+        return await run(assistant.diary.get_food_log, date, include_untracked=include_untracked)
 
     @mcp.tool(annotations=READ)
-    def search_foods(query: str, limit: int = 10) -> str:
+    async def search_foods(query: str, limit: int = 10) -> str:
         """Search Cronometer foods (or barcode) with measures, per-100g macros, and matching aliases."""
-        return run(assistant.foods.search_foods, query, limit=limit)
+        return await run(assistant.foods.search_foods, query, limit=limit)
 
     @mcp.tool(annotations=READ)
-    def get_food_details(food_id: int) -> str:
+    async def get_food_details(food_id: int) -> str:
         """Inspect complete metadata, measures, barcodes, recipe ingredients, and all nutrients for a food or recipe."""
-        return run(assistant.foods.get_food_details, food_id)
+        return await run(assistant.foods.get_food_details, food_id)
 
     @mcp.tool(annotations=READ)
-    def get_my_foods(
+    async def get_my_foods(
         query: str = "",
         include_recent: bool = True,
         include_custom: bool = True,
         include_aliases: bool = True,
     ) -> str:
         """Look up saved aliases, recently logged foods, and custom foods/recipes in one call."""
-        return run(
+        return await run(
             assistant.foods.get_my_foods,
             query=query,
             include_recent=include_recent,
@@ -152,14 +152,14 @@ def register_core_tools(
         )
 
     @mcp.tool(annotations=READ)
-    def list_nutrients(query: str = "") -> str:
+    async def list_nutrients(query: str = "") -> str:
         """List all writable Cronometer nutrients with canonical keys, IDs, and catalog units."""
-        return run(assistant.foods.list_nutrients, query=query)
+        return await run(assistant.foods.list_nutrients, query=query)
 
     # --- Diary Writes ---
 
     @mcp.tool(annotations=WRITE)
-    def log_food_entries(
+    async def log_food_entries(
         entries: list[LogFoodEntryInput],
         date: str | None = None,
         meal_group: str = "auto",
@@ -174,7 +174,7 @@ def register_core_tools(
         the existing entry's total with `edit_food_entry` instead of adding another line (unless
         a separate line is explicitly wanted).
         """
-        return run(
+        return await run(
             assistant.diary.log_food_entries,
             [e.model_dump(exclude_none=True) for e in entries],
             day=date,
@@ -184,7 +184,7 @@ def register_core_tools(
         )
 
     @mcp.tool(annotations=IDEMPOTENT_WRITE)
-    def edit_food_entry(
+    async def edit_food_entry(
         entry_id: int,
         date: str | None = None,
         grams: float | None = None,
@@ -197,10 +197,12 @@ def register_core_tools(
     ) -> str:
         """Edit any logged serving's amount, measure, time, meal group ('breakfast'/'lunch'/'dinner'/'snacks'/'uncategorized'/'0'..'8'), or date.
 
-        Prefer this over `log_food_entries` when adding more of a food already logged in the same
-        meal — pass the new combined `grams` (or `quantity`).
+        Only pass the fields you want to change; omitted fields (amount, measure, time,
+        meal_group, date) are preserved automatically. Prefer this over `log_food_entries`
+        when adding more of a food already logged in the same meal — pass the new combined
+        `grams` (or `quantity`).
         """
-        return run(
+        return await run(
             assistant.diary.edit_food_entry,
             entry_id,
             day=date,
@@ -214,14 +216,14 @@ def register_core_tools(
         )
 
     @mcp.tool(annotations=DESTRUCTIVE)
-    def remove_food_entries(entry_ids: list[int], date: str | None = None) -> str:
+    async def remove_food_entries(entry_ids: list[int], date: str | None = None) -> str:
         """Remove one or more logged food servings from a diary day (with read-back verification)."""
-        return run(assistant.diary.remove_food_entries, entry_ids, day=date)
+        return await run(assistant.diary.remove_food_entries, entry_ids, day=date)
 
     # --- Custom Foods & Recipes ---
 
     @mcp.tool(annotations=WRITE)
-    def create_custom_food(
+    async def create_custom_food(
         name: str,
         nutrients: dict[str, Any],
         basis_amount: float = 100.0,
@@ -245,7 +247,7 @@ def register_core_tools(
         nutrient's catalog unit. Use `carbohydrate_basis="excludes_fiber"` for EU/UK/AU/NZ/Israeli
         labels and `"includes_fiber"` for US/Canadian labels.
         """
-        return run(
+        return await run(
             assistant.custom.create_custom_food,
             name,
             nutrients,
@@ -267,7 +269,7 @@ def register_core_tools(
         )
 
     @mcp.tool(annotations=IDEMPOTENT_WRITE)
-    def update_custom_food(
+    async def update_custom_food(
         food_id: int,
         name: str | None = None,
         notes: str | None = None,
@@ -283,7 +285,7 @@ def register_core_tools(
         measures: list[CustomMeasureInput] | None = None,
     ) -> str:
         """Edit an owned custom food in place while safely preserving existing measure IDs."""
-        return run(
+        return await run(
             assistant.custom.update_custom_food,
             food_id,
             name=name,
@@ -301,12 +303,12 @@ def register_core_tools(
         )
 
     @mcp.tool(annotations=DESTRUCTIVE)
-    def retire_custom_food(food_id: int, retired: bool = True) -> str:
+    async def retire_custom_food(food_id: int, retired: bool = True) -> str:
         """Retire (or restore with retired=False) an owned custom food or recipe."""
-        return run(assistant.custom.retire_custom_food, food_id, retired=retired)
+        return await run(assistant.custom.retire_custom_food, food_id, retired=retired)
 
-    @mcp.tool(annotations=IDEMPOTENT_WRITE)
-    def save_recipe(
+    @mcp.tool(annotations=WRITE)
+    async def save_recipe(
         name: str,
         ingredients: list[RecipeIngredientInput],
         servings: float | None = None,
@@ -314,13 +316,15 @@ def register_core_tools(
         serving_type: Literal["weight", "servings"] = "weight",
         recipe_id: int | None = None,
         notes: str | None = None,
+        request_id: str | None = None,
     ) -> str:
         """Create or update a recipe. Pass `cooked_grams` when a dish lost/gained water in cooking.
 
         `servings` defaults to 1.0 when creating a new recipe, or keeps the existing recipe's
-        serving count on update unless a new value is provided.
+        serving count on update unless a new value is provided. Pass a stable `request_id` when
+        creating a new recipe so retries never create duplicates.
         """
-        return run(
+        return await run(
             assistant.recipes.save_recipe,
             name,
             [i.model_dump(exclude_none=True) for i in ingredients],
@@ -329,12 +333,13 @@ def register_core_tools(
             serving_type=serving_type,
             recipe_id=recipe_id,
             notes=notes,
+            request_id=request_id,
         )
 
     # --- Personal Aliases & Optional Cooking Scratchpad ---
 
     @mcp.tool(annotations=IDEMPOTENT_WRITE)
-    def remember_food_alias(
+    async def remember_food_alias(
         alias: str,
         food_id: int,
         translation_id: int = 0,
@@ -343,7 +348,7 @@ def register_core_tools(
         notes: str | None = None,
     ) -> str:
         """Remember a personal shorthand (in any language) for a usual food and optional portion."""
-        return run(
+        return await run(
             assistant.foods.remember_food_alias,
             alias,
             food_id,
@@ -354,12 +359,12 @@ def register_core_tools(
         )
 
     @mcp.tool(annotations=DESTRUCTIVE)
-    def delete_food_alias(alias: str) -> str:
+    async def delete_food_alias(alias: str) -> str:
         """Delete a previously saved personal food alias."""
-        return run(assistant.foods.delete_food_alias, alias)
+        return await run(assistant.foods.delete_food_alias, alias)
 
-    @mcp.tool(annotations=IDEMPOTENT_WRITE)
-    def save_meal_draft(
+    @mcp.tool(annotations=WRITE)
+    async def save_meal_draft(
         title: str,
         items: list[DraftItemInput],
         draft_id: str | None = None,
@@ -368,8 +373,12 @@ def register_core_tools(
         local_time: str | None = None,
         notes: str | None = None,
     ) -> str:
-        """Optional scratchpad to save a meal being prepared across chats. Not required before logging."""
-        return run(
+        """Optional scratchpad to save a meal being prepared across chats. Not required before logging.
+
+        Omitting `draft_id` creates a new draft; pass a caller-stable `draft_id` to update or make
+        retries idempotent.
+        """
+        return await run(
             assistant.diary.save_meal_draft,
             title,
             [i.model_dump(exclude_none=True) for i in items],
@@ -381,11 +390,11 @@ def register_core_tools(
         )
 
     @mcp.tool(annotations=READ)
-    def list_meal_drafts(limit: int = 20) -> str:
+    async def list_meal_drafts(limit: int = 20) -> str:
         """List saved cooking scratchpad drafts."""
-        return run(assistant.diary.list_meal_drafts, limit=limit)
+        return await run(assistant.diary.list_meal_drafts, limit=limit)
 
     @mcp.tool(annotations=DESTRUCTIVE)
-    def delete_meal_draft(draft_id: str) -> str:
+    async def delete_meal_draft(draft_id: str) -> str:
         """Delete a cooking scratchpad draft (does not touch Cronometer diary entries)."""
-        return run(assistant.diary.delete_meal_draft, draft_id)
+        return await run(assistant.diary.delete_meal_draft, draft_id)

@@ -207,7 +207,7 @@ class TrackingService:
         self, start: str, *, end: str | None = None, goal_hours: float = 16.0
     ) -> dict[str, Any]:
         self.client.sync_timezone()
-        tz = self.client._tzinfo()
+        tz = self.client.tzinfo()
         started = parse_local_datetime(start, tz)
         ended = parse_local_datetime(end, tz) if end is not None else None
         if ended is not None and ended <= started:
@@ -229,7 +229,7 @@ class TrackingService:
         if start is None and end is None and goal_hours is None:
             raise ValidationError("Provide start, end, or goal_hours")
         self.client.sync_timezone()
-        tz = self.client._tzinfo()
+        tz = self.client.tzinfo()
         started = parse_local_datetime(start, tz) if start is not None else None
         ended = parse_local_datetime(end, tz) if end is not None else None
         existing_fasts = self.client.get_fasting_with_date_range().get("fasts", [])

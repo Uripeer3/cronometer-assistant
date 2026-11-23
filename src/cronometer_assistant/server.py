@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import weakref
+from functools import partial
 from typing import Any
 
+import anyio
+import anyio.to_thread
 import httpx
 from cronometer_mcp import paging
 from cronometer_mcp.client import CronometerError
@@ -23,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 # Keep idle HTTP sessions alive for 24h (FastMCP's 30m default drops idle web/mobile chats).
 SESSION_IDLE_TIMEOUT = 24 * 3600
+MAX_WORKER_THREADS = 4
 
 INSTRUCTIONS = """
 You are a low-friction, accurate Cronometer nutrition logging assistant.
@@ -31,10 +37,10 @@ Match the user's language (or mix of languages).
 Core workflow:
 1. For "my usual" or repeated foods, check `get_my_foods` first (it returns saved aliases, recent foods, and custom foods in one call). Otherwise use `search_foods` (which also supports barcodes) and `get_food_details` for full nutrients.
 2. Ask at most 1–2 practical clarifying questions only when genuinely impactful: e.g., raw/dry vs cooked weight for grains/pasta/meat, significant cooking oils/sauces, or ambiguous product variants.
-3. Log directly with `log_food_entries` once you know what was eaten — pass `grams` OR `quantity` + `measure_id`/`measure_name` so the server computes exact grams from Cronometer's measure. Always include a unique `request_id` on the **first** write (and reuse that same `request_id` if you retry) so timeouts never cause duplicate entries.
+3. Log directly with `log_food_entries` once you know what was eaten — pass `grams` OR `quantity` + `measure_id`/`measure_name` so the server computes exact grams from Cronometer's measure. Always include a unique `request_id` on the **first** write for `log_food_entries`, `create_custom_food`, and new `save_recipe` calls (and reuse that same `request_id` if you retry) so timeouts never cause duplicate entries.
 4. **Same-meal additions — edit, don't duplicate:** If the user adds more of a food that is already logged in the same meal on that day (e.g., 100 g is already in dinner and they ask to add another 25 g to that meal), update the existing entry's total with `edit_food_entry` (100 g → 125 g) instead of calling `log_food_entries` to add another line — unless the user explicitly asks for a separate line or it is a distinct eating occasion (e.g., a separate snack later in the day).
 5. For packaged products missing from Cronometer (including from nutrition-label photos you read), use `create_custom_food`. Always specify `carbohydrate_basis`: use `excludes_fiber` for EU/UK/AU/NZ/Israeli labels (and include `fiber`) and `includes_fiber` for US/Canadian labels. Call `list_nutrients` for micronutrients. Never fill unknown nutrients with 0.
-6. Use `save_meal_draft` only when the user is still cooking and wants to save progress across chats; it is never required before logging.
+6. Use `save_meal_draft` only when the user is still cooking and wants to save progress across chats (pass a stable `draft_id` when updating or retrying); it is never required before logging.
 7. Use `get_food_log` to answer "what did I eat today?" or "how many calories/protein do I have left?".
 8. Never invent nutrient values, food IDs, or densities. Never ask for Cronometer passwords in chat; if a session expires, tell the user to run `cronometer-assistant login` locally.
 """.strip()
@@ -89,9 +95,19 @@ def create_server(
     mcp._mcp_server.version = __version__
     paging.register(mcp)
 
-    def run(fn, *args, **kwargs) -> str:
+    limiters: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, anyio.CapacityLimiter] = (
+        weakref.WeakKeyDictionary()
+    )
+
+    async def run(fn, *args, **kwargs) -> str:
+        loop = asyncio.get_running_loop()
+        limiter = limiters.get(loop)
+        if limiter is None:
+            limiter = anyio.CapacityLimiter(MAX_WORKER_THREADS)
+            limiters[loop] = limiter
         try:
-            return _ok(fn(*args, **kwargs))
+            result = await anyio.to_thread.run_sync(partial(fn, *args, **kwargs), limiter=limiter)
+            return _ok(result)
         except Exception as error:
             return _err(error)
 

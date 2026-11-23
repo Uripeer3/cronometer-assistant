@@ -20,9 +20,12 @@ from cronometer_assistant.server import SESSION_IDLE_TIMEOUT, create_server
 from cronometer_assistant.service import CronometerAssistant
 from cronometer_assistant.state import AssistantState
 from scripts.run_tunnel import (
+    acquire_client,
     choose_asset,
+    find_cached_client,
     install_archive,
     launch_arguments,
+    validate_client_version,
     validate_tunnel_id,
 )
 
@@ -44,6 +47,13 @@ class FakeCronometerBackend:
         }
         self.tamper_serving_grams: float | None = None
         self.ignore_nutrient_updates: bool = False
+        self.ignore_recipe_updates: bool = False
+        self.fail_next_get_food: bool = False
+        self.fail_get_foods: bool = False
+        self.scores_mode: str = "normal"
+        self.inject_stale_recipe_nutrient: dict[str, Any] | None = None
+        self.add_food_calls: int = 0
+        self.get_food_delay: float = 0.0
         self.diary_read_delay: float = 0.0
         self.fasts: list[dict[str, Any]] = []
         self.foods: dict[int, dict[str, Any]] = {
@@ -226,12 +236,21 @@ class FakeCronometerBackend:
             return httpx.Response(200, json={"result": "SUCCESS", "foods": matches})
 
         if path == "/api/v2/get_food":
+            if self.get_food_delay > 0:
+                import time
+
+                time.sleep(self.get_food_delay)
+            if self.fail_next_get_food:
+                self.fail_next_get_food = False
+                return httpx.Response(503, json={"result": "FAIL"})
             fid = body["id"]
             if fid not in self.foods:
                 return httpx.Response(404, json={"result": "FAIL"})
             return httpx.Response(200, json=self.foods[fid])
 
         if path == "/api/v2/get_foods":
+            if self.fail_get_foods:
+                return httpx.Response(503, json={"result": "FAIL"})
             ids = body.get("ids", [])
             return httpx.Response(
                 200,
@@ -251,9 +270,12 @@ class FakeCronometerBackend:
             )
 
         if path == "/api/v2/add_food":
+            self.add_food_calls += 1
             data = dict(body["data"])
             fid = data.get("id") or 0
             existing = self.foods.get(fid) if fid else None
+            if self.ignore_recipe_updates and existing is not None:
+                return httpx.Response(200, json={"result": "SUCCESS", "id": fid})
             if fid == 0:
                 fid = self.next_food_id
                 self.next_food_id += 1
@@ -298,6 +320,11 @@ class FakeCronometerBackend:
                 data["nutrients"] = [
                     {"id": nid, "amount": round(val, 4)} for nid, val in sorted(totals.items())
                 ]
+            if self.inject_stale_recipe_nutrient is not None and not data.get("meal"):
+                data["nutrients"] = [
+                    *list(data.get("nutrients", [])),
+                    dict(self.inject_stale_recipe_nutrient),
+                ]
             self.foods[fid] = data
             return httpx.Response(200, json={"result": "SUCCESS", "id": fid})
 
@@ -330,6 +357,20 @@ class FakeCronometerBackend:
             )
 
         if path == "/api/v2/get_nutrition_scores":
+            if self.scores_mode == "error_500":
+                return httpx.Response(500, json={"result": "FAIL"})
+            if self.scores_mode == "error_401":
+                return httpx.Response(401, json={"result": "FAIL"})
+            if self.scores_mode == "invalid_json":
+                return httpx.Response(200, content=b"not-json")
+            if self.scores_mode == "missing_all_targets":
+                return httpx.Response(
+                    200,
+                    json={
+                        "result": "SUCCESS",
+                        "scores": [{"title": "Vitamins", "score": 75.0, "components": []}],
+                    },
+                )
             sids = set(body.get("servingIds", []))
             totals = {208: 0.0, 203: 0.0, 205: 0.0, 291: 0.0, 204: 0.0}
             for entries in self.diary.values():
@@ -1247,6 +1288,51 @@ class ServiceAndMCPTests(unittest.TestCase):
         self.assertAlmostEqual(rice["macros_per_100g"]["energy_kcal"], 130.0, places=2)
         self.assertEqual(rice["ingredients"][0]["food_id"], 460334)
 
+        # Editing app-created servings recipe (72144024, capital-'S' "Serving" = 2)
+        # preserves servings=2 when omitted and verifies cleanly when updated to 4
+        rice_keep = self.assistant.recipes.save_recipe(
+            "Simple Rice Updated",
+            [{"food_id": 460334, "grams": 1500}],
+            recipe_id=72144024,
+        )
+        self.assertTrue(rice_keep["verified"])
+        self.assertAlmostEqual(rice_keep["servings"], 2.0, places=2)
+
+        rice_four = self.assistant.recipes.save_recipe(
+            "Simple Rice 4 Servings",
+            [{"food_id": 460334, "grams": 1500}],
+            servings=4,
+            recipe_id=72144024,
+            request_id="app-rice-4srv",
+        )
+        self.assertTrue(rice_four["verified"])
+        self.assertAlmostEqual(rice_four["servings"], 4.0, places=2)
+
+        # Editing app-created weight recipe (71766482, capital-'S' "Serving" + cooked_weight=450)
+        # updates cooked_weight to 500 AND keeps 500 on a subsequent edit omitting cooked_grams
+        chick_500 = self.assistant.recipes.save_recipe(
+            "FODMAP Paprica Chicken Updated",
+            [{"food_id": 460334, "grams": 600}, {"food_id": 72014363, "grams": 30}],
+            servings=4,
+            cooked_grams=500,
+            recipe_id=71766482,
+            request_id="app-chick-500",
+        )
+        self.assertTrue(chick_500["verified"])
+        self.assertAlmostEqual(chick_500["servings"], 4.0, places=2)
+        self.assertAlmostEqual(
+            self.assistant.foods.get_food_details(71766482)["cooked_weight_grams"], 500.0
+        )
+
+        chick_next = self.assistant.recipes.save_recipe(
+            "FODMAP Paprica Chicken Updated",
+            [{"food_id": 460334, "grams": 600}, {"food_id": 72014363, "grams": 30}],
+            recipe_id=71766482,
+        )
+        self.assertTrue(chick_next["verified"])
+        self.assertAlmostEqual(chick_next["final_grams"], 500.0, places=2)
+        self.assertAlmostEqual(chick_next["servings"], 4.0, places=2)
+
         # Weight recipe created via save_recipe (ingredients in comments) also resolves ingredients
         saved = self.assistant.recipes.save_recipe(
             "Saved Weight Mix",
@@ -1287,6 +1373,14 @@ class ServiceAndMCPTests(unittest.TestCase):
                     f"Tool {tool.name} has a string|integer union in schema: {tool.inputSchema}",
                 )
 
+            # save_recipe and save_meal_draft must NOT claim idempotentHint=True
+            by_name = {t.name: t for t in core_tools}
+            self.assertFalse(by_name["save_recipe"].annotations.idempotentHint)
+            self.assertFalse(by_name["save_meal_draft"].annotations.idempotentHint)
+            self.assertFalse(by_name["log_food_entries"].annotations.idempotentHint)
+            self.assertFalse(by_name["create_custom_food"].annotations.idempotentHint)
+            self.assertTrue(by_name["edit_food_entry"].annotations.idempotentHint)
+
             # Round-trip a core tool and an extra tool
             res = await default_srv.call_tool("search_foods", {"query": "אורז"})
             text = res[0][0].text if isinstance(res, tuple) else res[0].text
@@ -1300,11 +1394,774 @@ class ServiceAndMCPTests(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_save_recipe_request_id_and_draft_stable_id_prevent_duplicates(self):
+        # Transient read-back failure right after recipe creation must resume by saved food_id
+        self.backend.fail_next_get_food = True
+        with self.assertRaises(httpx.HTTPStatusError):
+            self.assistant.recipes.save_recipe(
+                "Retry Safe Stew",
+                [{"food_id": 460334, "grams": 200}],
+                servings=2,
+                request_id="recipe-req-1",
+            )
+        self.assertEqual(self.backend.add_food_calls, 1)
+
+        # Retry with same request_id finishes verification without calling add_food a second time
+        resumed = self.assistant.recipes.save_recipe(
+            "Retry Safe Stew",
+            [{"food_id": 460334, "grams": 200}],
+            servings=2,
+            request_id="recipe-req-1",
+        )
+        self.assertTrue(resumed["verified"])
+        self.assertFalse(resumed["already_saved"])
+        self.assertEqual(self.backend.add_food_calls, 1)
+
+        # Completed replay succeeds offline with zero remote calls and returns already_saved=True
+        self.backend.fail_get_foods = True
+        replayed = self.assistant.recipes.save_recipe(
+            "Retry Safe Stew",
+            [{"food_id": 460334, "grams": 200}],
+            servings=2,
+            request_id="recipe-req-1",
+        )
+        self.backend.fail_get_foods = False
+        self.assertTrue(replayed["already_saved"])
+        self.assertEqual(replayed["food_id"], resumed["food_id"])
+        self.assertEqual(self.backend.add_food_calls, 1)
+
+        # Caller-stable draft_id makes save_meal_draft retries idempotent
+        d1 = self.assistant.diary.save_meal_draft(
+            "Dinner prep", [{"description": "rice", "grams": 150}], draft_id="dinner-2026-11-23"
+        )
+        d2 = self.assistant.diary.save_meal_draft(
+            "Dinner prep", [{"description": "rice", "grams": 150}], draft_id="dinner-2026-11-23"
+        )
+        self.assertEqual(d1["draft"]["draft_id"], d2["draft"]["draft_id"])
+        self.assertEqual(len(self.assistant.diary.list_meal_drafts()["drafts"]), 1)
+
+    def test_completed_and_in_progress_meal_retries_survive_catalog_drift_and_outage(self):
+        # Log 1 cup (158 g) with request_id
+        first = self.assistant.diary.log_food_entries(
+            [{"food_id": 460334, "quantity": 1, "measure_name": "cup"}],
+            day="2026-11-22",
+            meal_group="lunch",
+            time="13:00",
+            request_id="cup-drift-1",
+        )
+        self.assertTrue(first["verified"])
+        self.assertAlmostEqual(first["logged"][0]["grams"], 158.0)
+
+        # Mutate catalog cup weight 158 g -> 180 g, retire the food, AND fail remote food reads
+        self.backend.foods[460334]["measures"][0]["value"] = 180.0
+        self.backend.foods[460334]["retired"] = True
+        self.backend.fail_get_foods = True
+
+        # Replaying the exact same request_id + args succeeds offline with original 158 g!
+        replayed = self.assistant.diary.log_food_entries(
+            [{"food_id": 460334, "quantity": 1, "measure_name": "cup"}],
+            day="2026-11-22",
+            meal_group="lunch",
+            time="13:00",
+            request_id="cup-drift-1",
+        )
+        self.assertTrue(replayed["already_logged"])
+        self.assertAlmostEqual(replayed["logged"][0]["grams"], 158.0)
+        self.assertEqual(replayed["logged"][0]["entry_id"], first["logged"][0]["entry_id"])
+
+        # Interrupted retry AFTER item 2 wrote remotely (journal left untouched in 'sending' state),
+        # followed by a catalog outage AND cup-weight drift -> recovers cleanly via persisted wire plan!
+        self.backend.fail_get_foods = False
+        self.backend.foods[460334]["retired"] = False
+        self.backend.foods[460334]["measures"][0]["value"] = 158.0
+
+        orig_add = self.assistant.diary._add_serving_row
+        calls = 0
+
+        def fail_second_after_write(**kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                orig_add(**kwargs)
+                raise httpx.ReadTimeout("simulated timeout after item 2 wrote")
+            return orig_add(**kwargs)
+
+        items = [
+            {"food_id": 460334, "quantity": 1, "measure_name": "cup"},
+            {"food_id": 72014363, "grams": 30},
+        ]
+        self.assistant.diary._add_serving_row = fail_second_after_write  # type: ignore[method-assign]
+        with self.assertRaises(httpx.ReadTimeout):
+            self.assistant.diary.log_food_entries(
+                items, day="2026-11-23", meal_group="lunch", time="13:00", request_id="cup-mid-1"
+            )
+        self.assistant.diary._add_serving_row = orig_add  # type: ignore[method-assign]
+
+        # Catalog cup weight drifts AND get_foods is down during replay; journal is untouched!
+        self.backend.foods[460334]["measures"][0]["value"] = 180.0
+        self.backend.fail_get_foods = True
+        resumed = self.assistant.diary.log_food_entries(
+            items, day="2026-11-23", meal_group="lunch", time="13:00", request_id="cup-mid-1"
+        )
+        self.backend.fail_get_foods = False
+        self.assertTrue(resumed["verified"])
+        self.assertAlmostEqual(resumed["logged"][0]["grams"], 158.0)
+        self.assertEqual(self.assistant.diary.get_food_log("2026-11-23")["serving_count"], 2)
+
+        # App-created meal=False batch recipe (400 g, 4 servings): logging 100 g sends 1.0 wire
+        # serving, verifies 100 g on first call, and replays identically offline (and if tampered,
+        # replay reports the same mismatch instead of falsely certifying the bad entry!).
+        self.backend.foods[88010] = {
+            "id": 88010,
+            "name": "App Four-Serving Rice",
+            "source": "Custom",
+            "category": 12,
+            "owner": 1001,
+            "retired": False,
+            "meal": False,
+            "labelType": "AMERICAN_2016",
+            "defaultMeasureId": 88011,
+            "barcodes": [],
+            "ingredients": [{"foodId": 460334, "grams": 400.0, "measureId": 1048861}],
+            "measures": [
+                {
+                    "id": 88011,
+                    "name": "serving",
+                    "type": "Recipe",
+                    "amount": 1.0,
+                    "value": 4.0,
+                    "hidden": False,
+                }
+            ],
+            "nutrients": [{"id": 208, "amount": 520.0}, {"id": 203, "amount": 10.8}],
+        }
+        orig_add_b = self.assistant.diary._add_serving_row
+
+        def interrupt_after_batch_write(**kwargs):
+            orig_add_b(**kwargs)
+            raise httpx.ReadTimeout("timeout after batch write")
+
+        self.assistant.diary._add_serving_row = interrupt_after_batch_write  # type: ignore[method-assign]
+        with self.assertRaises(httpx.ReadTimeout):
+            self.assistant.diary.log_food_entries(
+                [{"food_id": 88010, "grams": 100}],
+                day="2026-11-24",
+                meal_group="dinner",
+                time="19:00",
+                request_id="app-batch-1",
+            )
+        self.assistant.diary._add_serving_row = orig_add_b  # type: ignore[method-assign]
+
+        # Wire row stored exactly 1.0 serving (NOT 100.0!)
+        raw_row = self.backend.diary["2026-11-24"][0]
+        self.assertAlmostEqual(raw_row["grams"], 1.0, places=4)
+        self.assertEqual(raw_row["measureId"], 88011)
+
+        # Replay with catalog reads disabled verifies 100 g for that single diary entry
+        self.backend.fail_get_foods = True
+        replayed_batch = self.assistant.diary.log_food_entries(
+            [{"food_id": 88010, "grams": 100}],
+            day="2026-11-24",
+            meal_group="dinner",
+            time="19:00",
+            request_id="app-batch-1",
+        )
+        self.backend.fail_get_foods = False
+        self.assertTrue(replayed_batch["verified"])
+        self.assertAlmostEqual(replayed_batch["logged"][0]["grams"], 100.0, places=2)
+        self.assertEqual(len(self.backend.diary["2026-11-24"]), 1)
+
+        # Editing amount on meal=False batch recipe also converts to wire servings properly
+        edited_batch = self.assistant.diary.edit_food_entry(
+            replayed_batch["logged"][0]["entry_id"], day="2026-11-24", grams=200
+        )
+        self.assertTrue(edited_batch["verified"])
+        self.assertAlmostEqual(edited_batch["grams"], 200.0, places=2)
+        self.assertAlmostEqual(self.backend.diary["2026-11-24"][0]["grams"], 2.0, places=4)
+
+        # If backend tampers wire grams to 100 servings, BOTH first call and replay fail identically
+        self.backend.tamper_serving_grams = 100.0
+        bad_first = self.assistant.diary.log_food_entries(
+            [{"food_id": 88010, "grams": 100}],
+            day="2026-11-25",
+            meal_group="dinner",
+            time="19:00",
+            request_id="app-batch-tamper-1",
+        )
+        self.assertFalse(bad_first["verified"])
+        self.assertAlmostEqual(bad_first["logged"][0]["grams"], 10000.0, places=1)
+        self.backend.fail_get_foods = True
+        bad_replay = self.assistant.diary.log_food_entries(
+            [{"food_id": 88010, "grams": 100}],
+            day="2026-11-25",
+            meal_group="dinner",
+            time="19:00",
+            request_id="app-batch-tamper-1",
+        )
+        self.backend.fail_get_foods = False
+        self.backend.tamper_serving_grams = None
+        self.assertFalse(bad_replay["verified"])
+        self.assertAlmostEqual(bad_replay["logged"][0]["grams"], 10000.0, places=1)
+
+    def test_legacy_v1_journals_replay_safely_across_upgrade(self):
+        # Seed a legacy (90e00e2) completed meal record using the old unprefixed resolved-steps hash
+        legacy_meal_fp = hashlib.sha256(
+            json.dumps(
+                {
+                    "day": "2026-11-22",
+                    "steps": [
+                        {
+                            "food_id": 460334,
+                            "measure_id": 1048859,
+                            "grams": 158.0,
+                            "translation_id": 0,
+                            "group_id": 2,
+                            "wall_time": "13:00:00",
+                        }
+                    ],
+                },
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
+        self.state.save_idempotent(
+            "legacy-meal-1",
+            "log_food_entries",
+            {
+                "date": "2026-11-22",
+                "logged_count": 1,
+                "logged": [{"entry_id": 7777, "food_id": 460334, "grams": 158.0}],
+                "verified": True,
+                "already_logged": False,
+            },
+            fingerprint=legacy_meal_fp,
+        )
+        replayed = self.assistant.diary.log_food_entries(
+            [{"food_id": 460334, "quantity": 1, "measure_name": "cup"}],
+            day="2026-11-22",
+            meal_group="lunch",
+            time="13:00",
+            request_id="legacy-meal-1",
+        )
+        self.assertTrue(replayed["already_logged"])
+        self.assertEqual(replayed["logged"][0]["entry_id"], 7777)
+
+        # If a legacy key can't be matched (e.g. different payload), surface saved entry_ids instead of advising a fresh key
+        with self.assertRaises(ValidationError) as ctx:
+            self.assistant.diary.log_food_entries(
+                [{"food_id": 460334, "grams": 99}],
+                day="2026-11-22",
+                meal_group="lunch",
+                time="13:00",
+                request_id="legacy-meal-1",
+            )
+        self.assertIn("7777", str(ctx.exception))
+
+        # Seed a legacy (90e00e2) custom-food record (unprefixed hash omitting notes)
+        legacy_cf_fp = hashlib.sha256(
+            json.dumps(
+                {
+                    "name": "Legacy Bar",
+                    "category_id": 0,
+                    "barcode": None,
+                    "label_type": "EU",
+                    "measures": [
+                        {
+                            "id": 0,
+                            "name": "serving",
+                            "value": 100.0,
+                            "amount": 1.0,
+                            "type": "Weight",
+                        },
+                        {"id": 0, "name": "g", "value": 1.0, "amount": 1.0, "type": "Weight"},
+                    ],
+                    "nutrients": [
+                        {"id": 203, "amount": 15.0},
+                        {"id": 205, "amount": 25.0},
+                        {"id": 208, "amount": 200.0},
+                        {"id": 291, "amount": 5.0},
+                    ],
+                },
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
+        self.state.save_idempotent(
+            "legacy-cf-1",
+            "create_custom_food",
+            {"food_id": 9123, "name": "Legacy Bar", "verified": True, "already_created": False},
+            fingerprint=legacy_cf_fp,
+        )
+        cf_replay = self.assistant.custom.create_custom_food(
+            "Legacy Bar",
+            {"energy": 200, "protein": 15, "carbs": 20, "fiber": 5},
+            carbohydrate_basis="excludes_fiber",
+            notes="same food",
+            request_id="legacy-cf-1",
+        )
+        self.assertTrue(cf_replay["already_created"])
+        self.assertEqual(cf_replay["food_id"], 9123)
+
+    def test_batch_recipe_unknown_weight_legacy_atomic_and_metadata_only_edits(self):
+        # 1) Unknown-weight 4-serving Recipe-measure batch
+        self.backend.foods[88001] = {
+            "id": 88001,
+            "name": "Mystery Four-Serving Chili",
+            "source": "Custom",
+            "category": 12,
+            "owner": 1001,
+            "retired": False,
+            "meal": True,
+            "labelType": "AMERICAN_2016",
+            "defaultMeasureId": 88101,
+            "barcodes": [],
+            "ingredients": [],
+            "measures": [
+                {
+                    "id": 88101,
+                    "name": "serving",
+                    "type": "Recipe",
+                    "amount": 1.0,
+                    "value": 4.0,
+                    "hidden": False,
+                },
+            ],
+            "nutrients": [
+                {"id": 208, "amount": 800.0},
+                {"id": 203, "amount": 40.0},
+                {"id": 262, "amount": 20.0},
+            ],
+        }
+        # 2) Known-weight 500 g batch with legacy Atomic measure (wire grams=20 -> 0.2 batch = 100 g)
+        self.backend.foods[88002] = {
+            "id": 88002,
+            "name": "Legacy Atomic Soup",
+            "source": "Custom",
+            "category": 12,
+            "owner": 1001,
+            "retired": False,
+            "meal": True,
+            "labelType": "AMERICAN_2016",
+            "defaultMeasureId": 88201,
+            "barcodes": [],
+            "ingredients": [{"foodId": 460334, "grams": 500.0, "measureId": 1048861}],
+            "measures": [
+                {
+                    "id": 88201,
+                    "name": "g",
+                    "type": "Atomic",
+                    "amount": 1.0,
+                    "value": 1.0,
+                    "hidden": False,
+                },
+            ],
+            "nutrients": [
+                {"id": 208, "amount": 500.0},
+                {"id": 203, "amount": 25.0},
+            ],
+        }
+        # 3) Unknown-weight batch with legacy Atomic measure (wire grams=20 -> 0.2 batch, grams=None)
+        self.backend.foods[88003] = {
+            **self.backend.foods[88002],
+            "id": 88003,
+            "name": "Unknown Weight Atomic Soup",
+            "ingredients": [],
+        }
+        self.backend.diary["2026-11-22"] = [
+            {
+                "type": "Serving",
+                "servingId": 99101,
+                "foodId": 88001,
+                "measureId": 88101,
+                "grams": 1.0,
+                "order": (3 << 16) | 1,
+                "time": "19:00:00",
+                "day": "2026-11-22",
+            },
+            {
+                "type": "Serving",
+                "servingId": 99102,
+                "foodId": 88002,
+                "measureId": 88201,
+                "grams": 20.0,
+                "order": (2 << 16) | 1,
+                "time": "13:00:00",
+                "day": "2026-11-22",
+            },
+            {
+                "type": "Serving",
+                "servingId": 99103,
+                "foodId": 88003,
+                "measureId": 88201,
+                "grams": 20.0,
+                "order": (2 << 16) | 2,
+                "time": "13:05:00",
+                "day": "2026-11-22",
+            },
+        ]
+        log = self.assistant.diary.get_food_log("2026-11-22", include_untracked=True)
+        by_eid = {r["entry_id"]: r for r in log["servings"]}
+
+        self.assertIsNone(by_eid[99101]["grams"])
+        self.assertAlmostEqual(by_eid[99101]["key_macros"]["energy_kcal"], 200.0, places=2)
+        self.assertAlmostEqual(by_eid[99101]["key_macros"]["protein_g"], 10.0, places=2)
+        caffeine = next((n for n in log["nutrients"] if n["id"] == 262), None)
+        self.assertIsNotNone(caffeine)
+        self.assertAlmostEqual(caffeine["amount"], 5.0, places=2)
+
+        # Known-weight legacy Atomic row: 20 / 100 = 0.2 batch -> 100 g and 100 kcal!
+        self.assertAlmostEqual(by_eid[99102]["grams"], 100.0, places=2)
+        self.assertAlmostEqual(by_eid[99102]["key_macros"]["energy_kcal"], 100.0, places=2)
+        self.assertAlmostEqual(by_eid[99102]["key_macros"]["protein_g"], 5.0, places=2)
+
+        # Unknown-weight legacy Atomic row: 20 / 100 = 0.2 batch -> grams=None and 100 kcal!
+        self.assertIsNone(by_eid[99103]["grams"])
+        self.assertAlmostEqual(by_eid[99103]["key_macros"]["energy_kcal"], 100.0, places=2)
+
+        # Metadata-only edit (meal_group/time) on unknown-weight batch verifies cleanly with grams=None
+        moved = self.assistant.diary.edit_food_entry(
+            99101, day="2026-11-22", meal_group="lunch", time="12:30"
+        )
+        self.assertTrue(moved["verified"])
+        self.assertIsNone(moved["grams"])
+        self.assertEqual(moved["meal_group"], "lunch")
+
+        # Meal-group-only edit on a normal food preserves grams, measure_id, and time untouched
+        normal = self.assistant.diary.log_food_entries(
+            [{"food_id": 460334, "grams": 42}],
+            day="2026-11-23",
+            meal_group="breakfast",
+            time="08:15",
+        )
+        nsid = normal["logged"][0]["entry_id"]
+        nmid = normal["logged"][0]["measure_id"]
+        moved_normal = self.assistant.diary.edit_food_entry(
+            nsid, day="2026-11-23", meal_group="snacks"
+        )
+        self.assertTrue(moved_normal["verified"])
+        self.assertAlmostEqual(moved_normal["grams"], 42.0, places=2)
+        self.assertEqual(moved_normal["measure_id"], nmid)
+        self.assertEqual(moved_normal["meal_group"], "snacks")
+        self.assertEqual(moved_normal["time"], "8:15:0")
+
+        # find_entries_by_food must also report grams=None instead of raw wire 1.0
+        found = self.assistant.diary_extras.find_entries_by_food(
+            88001, start_day="2026-11-22", end_day="2026-11-22"
+        )
+        self.assertIsNone(found["entries"][0]["grams"])
+        self.assertIsNone(found["total_grams"])
+        self.assertEqual(found["unknown_weight_entries"], 1)
+
+    def test_recipe_verification_catches_ignored_swaps_stale_nutrients_notes_and_local_errors(self):
+        # Create one servings-based recipe and one weight-based recipe with 100 g rice
+        srv_recipe = self.assistant.recipes.save_recipe(
+            "Servings Swap Test",
+            [{"food_id": 460334, "grams": 100}],
+            servings=2,
+            serving_type="servings",
+        )
+        wt_recipe = self.assistant.recipes.save_recipe(
+            "Weight Swap Test",
+            [{"food_id": 460334, "grams": 100}],
+            servings=2,
+            serving_type="weight",
+            notes="Previously used 10 g of food 42",
+        )
+        self.assertTrue(srv_recipe["verified"])
+        self.assertTrue(wt_recipe["verified"])
+
+        # User note mentioning "10 g of food 42" must NOT be counted as an ingredient
+        details = self.assistant.foods.get_food_details(wt_recipe["food_id"])
+        self.assertEqual(len(details["ingredients"]), 1)
+        self.assertEqual(details["ingredients"][0]["food_id"], 460334)
+
+        # Stale extra nonzero nutrient (even small micronutrient 0.04) must fail verification
+        self.backend.inject_stale_recipe_nutrient = {"id": 324, "amount": 0.04}
+        stale_res = self.assistant.recipes.save_recipe(
+            "Stale Nutrient Check",
+            [{"food_id": 460334, "grams": 100}],
+            servings=1,
+            serving_type="weight",
+        )
+        self.backend.inject_stale_recipe_nutrient = None
+        self.assertFalse(stale_res["verified"])
+        self.assertTrue(
+            any("unexpected nutrient 324" in m for m in stale_res["verification_mismatches"])
+        )
+
+        # User note containing "Cooked weight varies" must NOT lock cooked weight on ingredient change
+        cw_note = self.assistant.recipes.save_recipe(
+            "Note Cooked Weight Test",
+            [{"food_id": 460334, "grams": 100}],
+            servings=1,
+            serving_type="weight",
+            notes="Cooked weight varies",
+        )
+        cw_updated = self.assistant.recipes.save_recipe(
+            "Note Cooked Weight Test",
+            [{"food_id": 460334, "grams": 200}],
+            servings=1,
+            recipe_id=cw_note["food_id"],
+        )
+        self.assertTrue(cw_updated["verified"])
+        self.assertAlmostEqual(cw_updated["final_grams"], 200.0, places=2)
+
+        # Duplicate-named existing measures with distinct IDs are both preserved (never stranding request_id)
+        dup_id = cw_note["food_id"]
+        self.backend.foods[dup_id]["measures"].append(
+            {"id": 99555, "name": "serving", "type": "Weight", "amount": 1.0, "value": 50.0}
+        )
+        self.backend.foods[dup_id]["measures"].append(
+            {"id": 99556, "name": "serving", "type": "Weight", "amount": 1.0, "value": 75.0}
+        )
+        dup_saved = self.assistant.recipes.save_recipe(
+            "Note Cooked Weight Test",
+            [{"food_id": 460334, "grams": 200}],
+            servings=2,
+            recipe_id=dup_id,
+            request_id="dup-measures-1",
+        )
+        self.assertTrue(dup_saved["verified"])
+        persisted_mids = {m["measure_id"] for m in dup_saved["measures"]}
+        self.assertTrue({99555, 99556}.issubset(persisted_mids))
+
+        # Footer parser round-trips scientific-notation weights emitted by `:g`
+        from cronometer_assistant.parsing import parse_weight_recipe_ingredient_footer
+
+        self.assertEqual(
+            parse_weight_recipe_ingredient_footer(
+                "Note\n\nRaw ingredients (1e+06 g): 1e+06 g of food 42; 25.5 g of food 7"
+            ),
+            [(42, 1000000.0), (7, 25.5)],
+        )
+
+        # Local nutrient validation failure must NOT leave request_id stuck in 'sending'
+        self.backend.foods[88999] = {
+            "id": 88999,
+            "name": "Empty Nutrient Food",
+            "source": "Custom",
+            "category": 1,
+            "owner": 1001,
+            "retired": False,
+            "meal": False,
+            "defaultMeasureId": 88991,
+            "barcodes": [],
+            "measures": [
+                {
+                    "id": 88991,
+                    "name": "g",
+                    "type": "Weight",
+                    "amount": 1.0,
+                    "value": 1.0,
+                    "hidden": False,
+                }
+            ],
+            "nutrients": [],
+        }
+        with self.assertRaises(ValidationError):
+            self.assistant.recipes.save_recipe(
+                "No Nutrient Recipe",
+                [{"food_id": 88999, "grams": 100}],
+                request_id="recipe-local-fail-1",
+            )
+        self.assertIsNone(self.state.get_operation("recipe-local-fail-1", "save_recipe"))
+        # Once the food has nutrients, the same request_id works cleanly!
+        self.backend.foods[88999]["nutrients"] = [{"id": 208, "amount": 100.0}]
+        recovered = self.assistant.recipes.save_recipe(
+            "No Nutrient Recipe",
+            [{"food_id": 88999, "grams": 100}],
+            request_id="recipe-local-fail-1",
+        )
+        self.assertTrue(recovered["verified"])
+
+        # Backend acknowledges save but silently retains the old recipe
+        self.backend.ignore_recipe_updates = True
+
+        srv_edit = self.assistant.recipes.save_recipe(
+            "Servings Swap Test Renamed",
+            [{"food_id": 72014363, "grams": 100}],
+            servings=2,
+            recipe_id=srv_recipe["food_id"],
+        )
+        self.assertFalse(srv_edit["verified"])
+        self.assertTrue(any("ingredient" in m for m in srv_edit["verification_mismatches"]))
+        self.assertTrue(any("name:" in m for m in srv_edit["verification_mismatches"]))
+
+        wt_edit = self.assistant.recipes.save_recipe(
+            "Weight Swap Test Renamed",
+            [{"food_id": 72014363, "grams": 100}],
+            servings=2,
+            recipe_id=wt_recipe["food_id"],
+        )
+        self.assertFalse(wt_edit["verified"])
+        self.assertTrue(any("ingredient" in m for m in wt_edit["verification_mismatches"]))
+        self.assertTrue(any("nutrient" in m for m in wt_edit["verification_mismatches"]))
+        self.assertTrue(any("name:" in m for m in wt_edit["verification_mismatches"]))
+
+    def test_concurrent_retire_and_update_custom_food_do_not_clobber_each_other(self):
+        from concurrent.futures import ThreadPoolExecutor
+
+        self.backend.get_food_delay = 0.03
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            f1 = pool.submit(
+                self.assistant.custom.update_custom_food,
+                72014363,
+                name="Pretzels Renamed Safely",
+            )
+            f2 = pool.submit(self.assistant.custom.retire_custom_food, 72014363, retired=True)
+            r1, r2 = f1.result(), f2.result()
+        self.backend.get_food_delay = 0.0
+        self.assertTrue(r1["verified"])
+        self.assertTrue(r2["verified"])
+        final = self.assistant.foods.get_food_details(72014363)
+        self.assertEqual(final["name"], "Pretzels Renamed Safely")
+        self.assertTrue(final["retired"])
+
+    def test_custom_food_resumes_verification_after_readback_failure_and_hashes_notes(self):
+        self.backend.fail_next_get_food = True
+        with self.assertRaises(httpx.HTTPStatusError):
+            self.assistant.custom.create_custom_food(
+                "Crash Safe Bar",
+                {"energy": 200, "protein": 15, "carbs": 20, "fiber": 5, "fat": 6},
+                carbohydrate_basis="excludes_fiber",
+                notes="batch A",
+                request_id="cf-readback-1",
+            )
+        self.assertEqual(self.backend.add_food_calls, 1)
+
+        # Retry resumes verification by persisted food_id without creating a second custom food
+        resumed = self.assistant.custom.create_custom_food(
+            "Crash Safe Bar",
+            {"energy": 200, "protein": 15, "carbs": 20, "fiber": 5, "fat": 6},
+            carbohydrate_basis="excludes_fiber",
+            notes="batch A",
+            request_id="cf-readback-1",
+        )
+        self.assertTrue(resumed["verified"])
+        self.assertFalse(resumed["already_created"])
+        self.assertEqual(self.backend.add_food_calls, 1)
+
+        # Changing notes with the same request_id must be rejected as a different payload
+        with self.assertRaises(ValidationError):
+            self.assistant.custom.create_custom_food(
+                "Crash Safe Bar",
+                {"energy": 200, "protein": 15, "carbs": 20, "fiber": 5, "fat": 6},
+                carbohydrate_basis="excludes_fiber",
+                notes="batch B",
+                request_id="cf-readback-1",
+            )
+
+        # Completed replay works even if Cronometer is offline
+        self.backend.fail_next_get_food = True
+        replayed = self.assistant.custom.create_custom_food(
+            "Crash Safe Bar",
+            {"energy": 200, "protein": 15, "carbs": 20, "fiber": 5, "fat": 6},
+            carbohydrate_basis="excludes_fiber",
+            notes="batch A",
+            request_id="cf-readback-1",
+        )
+        self.assertTrue(replayed["already_created"])
+        self.assertEqual(replayed["food_id"], resumed["food_id"])
+
+    def test_slow_remote_read_does_not_block_concurrent_local_mcp_tool(self):
+        import time
+
+        self.assistant.diary.save_meal_draft(
+            "Quick Draft", [{"description": "eggs", "quantity": 2}], draft_id="fast-1"
+        )
+        self.backend.diary_read_delay = 0.25
+        srv = create_server(self.assistant)
+
+        async def run():
+            order: list[tuple[str, float]] = []
+
+            async def slow_remote():
+                res = await srv.call_tool("get_food_log", {"date": "2026-11-22"})
+                order.append(("remote", time.monotonic()))
+                return res
+
+            async def fast_local():
+                await asyncio.sleep(0.03)
+                res = await srv.call_tool("list_meal_drafts", {})
+                order.append(("local", time.monotonic()))
+                return res
+
+            rem_res, loc_res = await asyncio.gather(slow_remote(), fast_local())
+            rem_text = rem_res[0][0].text if isinstance(rem_res, tuple) else rem_res[0].text
+            loc_text = loc_res[0][0].text if isinstance(loc_res, tuple) else loc_res[0].text
+            self.assertTrue(json.loads(rem_text)["ok"])
+            self.assertTrue(json.loads(loc_text)["ok"])
+            self.assertEqual([name for name, _ in order], ["local", "remote"])
+            self.assertGreater(order[1][1] - order[0][1], 0.1)
+
+        asyncio.run(run())
+
+    def test_get_food_log_degrades_gracefully_when_nutrition_scores_unavailable(self):
+        self.assistant.diary.log_food_entries(
+            [{"food_id": 460334, "grams": 100}, {"food_id": 72014363, "grams": 30}],
+            day="2026-11-22",
+            meal_group="dinner",
+            time="19:00",
+        )
+
+        # Normal mode reports complete
+        ok_log = self.assistant.diary.get_food_log("2026-11-22")
+        self.assertEqual(ok_log["nutrient_summary_status"], "complete")
+        self.assertNotIn("nutrient_summary_warning", ok_log)
+
+        # Missing "All Targets" returns servings + locally computed totals with degraded status
+        self.backend.scores_mode = "missing_all_targets"
+        deg1 = self.assistant.diary.get_food_log("2026-11-22")
+        self.assertEqual(deg1["nutrient_summary_status"], "degraded")
+        self.assertIn("All Targets", deg1["nutrient_summary_warning"])
+        self.assertEqual(deg1["serving_count"], 2)
+        self.assertAlmostEqual(deg1["macro_summary"]["energy"]["amount"], 244.0, places=1)
+        self.assertAlmostEqual(deg1["macro_summary"]["protein"]["amount"], 5.7, places=1)
+
+        # HTTP 500 on scores still returns the food list and local totals
+        self.backend.scores_mode = "error_500"
+        deg2 = self.assistant.diary.get_food_log("2026-11-22")
+        self.assertEqual(deg2["nutrient_summary_status"], "degraded")
+        self.assertIn("500", deg2["nutrient_summary_warning"])
+        self.assertEqual(deg2["serving_count"], 2)
+
+        # Malformed JSON on 200 OK from scores still degrades gracefully
+        self.backend.scores_mode = "invalid_json"
+        deg3 = self.assistant.diary.get_food_log("2026-11-22")
+        self.assertEqual(deg3["nutrient_summary_status"], "degraded")
+        self.assertEqual(deg3["serving_count"], 2)
+
+        # Auth errors (401 -> SessionExpiredError) must still propagate, not be silently swallowed
+        from cronometer_assistant.auth import SessionExpiredError
+
+        self.backend.scores_mode = "error_401"
+        with self.assertRaises(SessionExpiredError):
+            self.assistant.diary.get_food_log("2026-11-22")
+
+    def test_upstream_client_adapter_contract(self):
+        from cronometer_mcp.client import CronometerClient
+
+        for method_name in (
+            "_request",
+            "_request_v3",
+            "_save_food",
+            "_normalise_ingredients",
+            "_format_day",
+            "_tzinfo",
+        ):
+            self.assertTrue(
+                hasattr(CronometerClient, method_name),
+                f"Upstream CronometerClient missing expected helper {method_name}",
+            )
+
     def test_tunnel_launcher_helpers(self):
+        from unittest.mock import patch
+
         tid = "tunnel_" + "a" * 32
         self.assertEqual(validate_tunnel_id(tid), tid)
         with self.assertRaises(ValueError):
             validate_tunnel_id("bad")
+        self.assertEqual(validate_client_version("v1.2.3"), "v1.2.3")
+        with self.assertRaises(ValueError):
+            validate_client_version("latest")
 
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w") as zf:
@@ -1332,16 +2189,44 @@ class ServiceAndMCPTests(unittest.TestCase):
         self.assertEqual(asset["digest"], digest)
 
         with tempfile.TemporaryDirectory() as tmp:
-            dest = Path(tmp) / "tunnel-client"
+            runtime_dir = Path(tmp)
+            dest = runtime_dir / "v1.2.3" / "tunnel-client"
             install_archive(payload, digest, dest)
             self.assertTrue(dest.is_file())
+            self.assertEqual(find_cached_client(runtime_dir), dest)
+            self.assertEqual(find_cached_client(runtime_dir, version="v1.2.3"), dest)
+            self.assertIsNone(find_cached_client(runtime_dir, version="v1.2.4"))
+
+            # acquire_client reuses cached verified binary without hitting GitHub on restarts
+            with patch(
+                "scripts.run_tunnel.read_public_url",
+                side_effect=AssertionError("should not access network when cached binary exists"),
+            ):
+                reused = acquire_client(runtime_dir)
+                self.assertEqual(reused, dest)
+
+            # Tampering with the cached binary or writing non-object metadata invalidates cache cleanly
+            dest.write_bytes(b"#!/bin/sh\necho tampered\n")
+            self.assertIsNone(find_cached_client(runtime_dir))
+            self.assertIsNone(find_cached_client(runtime_dir, version="v1.2.3"))
+            dest.with_suffix(".meta.json").write_text("[]", encoding="utf-8")
+            self.assertIsNone(find_cached_client(runtime_dir, version="v1.2.3"))
+
+            # Symlinked version directory must be rejected on install without touching its target
+            outside = runtime_dir / "outside"
+            outside.mkdir()
+            (runtime_dir / "v1.2.4").symlink_to(outside)
+            with self.assertRaises(ValueError):
+                install_archive(payload, digest, runtime_dir / "v1.2.4" / "tunnel-client")
+            self.assertEqual(list(outside.iterdir()), [])
+
             cmd = launch_arguments(
                 dest,
                 tid,
                 Path("/usr/bin/python3"),
-                Path(tmp) / "assistant.sqlite",
-                Path(tmp) / "session.json",
-                Path(tmp) / "health.url",
+                runtime_dir / "assistant.sqlite",
+                runtime_dir / "session.json",
+                runtime_dir / "health.url",
             )
             self.assertIn("serve", " ".join(cmd))
 

@@ -11,6 +11,11 @@ from zoneinfo import ZoneInfo
 
 from .nutrition import KEY_MACRO_IDS, ValidationError
 
+_FOOTER_MARKER = "\n\nRaw ingredients ("
+_FOOTER_PREFIX = "Raw ingredients ("
+_NUM_TOKEN = r"\d+(?:\.\d+)?(?:[eE][+-]?\d+)?"
+_FOOTER_ING_RE = re.compile(rf"(?<![\w.-])({_NUM_TOKEN})\s*g\s+of\s+food\s+(\d+)\b")
+
 MEAL_GROUP_TO_ID: dict[str, int] = {
     "uncategorized": 0,
     "breakfast": 1,
@@ -190,6 +195,125 @@ def is_recipe_food(raw_food: dict[str, Any]) -> bool:
     return isinstance(props, dict) and str(props.get("advancedServingSize", "")).lower() == "true"
 
 
+def extract_weight_recipe_footer(comments: str | None) -> str | None:
+    """Return only the auto-generated Raw ingredients footer, excluding any user notes."""
+    if not comments:
+        return None
+    text = str(comments)
+    idx = text.rfind(_FOOTER_MARKER)
+    if idx != -1:
+        return text[idx + 2 :]
+    if text.startswith(_FOOTER_PREFIX):
+        return text
+    return None
+
+
+def parse_weight_recipe_ingredient_footer(comments: str | None) -> list[tuple[int, float]]:
+    """Parse `(food_id, grams)` pairs strictly from the generated Raw ingredients footer."""
+    footer = extract_weight_recipe_footer(comments)
+    if not footer:
+        return []
+    pairs: list[tuple[int, float]] = []
+    for grams_s, fid_s in _FOOTER_ING_RE.findall(footer):
+        try:
+            pairs.append((int(fid_s), float(grams_s)))
+        except ValueError:
+            continue
+    return pairs
+
+
+def extract_weight_recipe_user_notes(comments: str | None) -> str | None:
+    """Return user notes above the generated Raw ingredients footer, if any."""
+    if not comments:
+        return None
+    text = str(comments)
+    idx = text.rfind(_FOOTER_MARKER)
+    if idx != -1:
+        return text[:idx].strip() or None
+    if text.startswith(_FOOTER_PREFIX):
+        return None
+    return text
+
+
+def batch_recipe_wire_units(
+    raw_food: dict[str, Any], measure_id: int | None = None
+) -> tuple[int, float] | None:
+    """Return `(wire_measure_id, grams_per_wire_unit)` for any batch-stored recipe, or None.
+
+    Uses the same batch classification (`is_batch_recipe`) as diary read-back so both
+    `meal=True` and app-created `meal=False` `Recipe`-measure recipes convert identically.
+    """
+    if not is_batch_recipe(raw_food):
+        return None
+    total = native_recipe_total_grams(raw_food)
+    if not total or total <= 0:
+        raise ValidationError(
+            f"Recipe {raw_food.get('id')} has no known batch weight, so gram conversion is unavailable"
+        )
+    measures = [m for m in raw_food.get("measures", []) if isinstance(m, dict)]
+    chosen = next(
+        (
+            m
+            for m in measures
+            if m.get("type") == "Recipe"
+            and str(m.get("name", "")).casefold() == "full recipe"
+            and isinstance(m.get("value"), (int, float))
+            and m["value"] > 0
+        ),
+        None,
+    )
+    if chosen is None and measure_id is not None:
+        chosen = next(
+            (
+                m
+                for m in measures
+                if m.get("id") == measure_id
+                and m.get("type") == "Recipe"
+                and isinstance(m.get("value"), (int, float))
+                and m["value"] > 0
+            ),
+            None,
+        )
+    if chosen is None:
+        chosen = next(
+            (
+                m
+                for m in measures
+                if m.get("type") == "Recipe"
+                and isinstance(m.get("value"), (int, float))
+                and m["value"] > 0
+            ),
+            None,
+        )
+    if chosen is None:
+        raise ValidationError(f"Recipe {raw_food.get('id')} has no usable Recipe measure")
+    return int(chosen.get("id") or 0), total / float(chosen["value"])
+
+
+def recipe_servings(raw_food: dict[str, Any], total_grams: float) -> float:
+    """Return a recipe's serving count, matching both 'serving' and Cronometer app 'Serving'."""
+    serving_m = next(
+        (
+            m
+            for m in raw_food.get("measures", [])
+            if isinstance(m, dict) and str(m.get("name", "")).casefold() == "serving"
+        ),
+        None,
+    )
+    if serving_m is None:
+        return 1.0
+    val = serving_m.get("value")
+    if not isinstance(val, (int, float)) or not math.isfinite(val) or val <= 0:
+        return 1.0
+    if serving_m.get("type") == "Recipe":
+        return float(val)
+    amt = serving_m.get("amount") or 1.0
+    if not isinstance(amt, (int, float)) or not math.isfinite(amt) or amt <= 0:
+        amt = 1.0
+    grams_per_serving = float(val) / float(amt)
+    return round(total_grams / grams_per_serving, 4) if total_grams > 0 else 1.0
+
+
 def serving_scale_and_display(
     raw_food: dict[str, Any], entry: dict[str, Any]
 ) -> tuple[float | None, dict[str, Any] | None, float | None, float | None]:
@@ -226,22 +350,24 @@ def serving_scale_and_display(
         if isinstance(grams, (int, float)) and gpu and gpu > 0:
             servings = round(float(grams) / gpu, 4)
 
-    if is_batch_recipe(raw_food) and isinstance(grams, (int, float)):
+    if is_batch_recipe(raw_food):
+        if not isinstance(grams, (int, float)):
+            return None, measure_info, None, None
         total_grams = native_recipe_total_grams(raw_food)
-        if total_grams and total_grams > 0:
-            if (
-                measure
-                and measure.get("type") == "Recipe"
-                and isinstance(measure.get("value"), (int, float))
-                and measure["value"] > 0
-            ):
-                fraction = float(grams) / float(measure["value"])
-            elif measure and measure.get("type") != "Recipe":
-                fraction = float(grams) / 100.0
-            else:
-                fraction = float(grams)
-            actual_grams = round(fraction * total_grams, 2)
-            return fraction, measure_info, None, actual_grams
+        if (
+            measure
+            and measure.get("type") == "Recipe"
+            and isinstance(measure.get("value"), (int, float))
+            and measure["value"] > 0
+        ):
+            fraction: float = float(grams) / float(measure["value"])
+        elif measure and measure.get("type") != "Recipe":
+            # Legacy Atomic / non-Recipe batch rows scale by grams / 100.0 in Cronometer.
+            fraction = float(grams) / 100.0
+        else:
+            fraction = float(grams)
+        actual_grams = round(fraction * total_grams, 2) if total_grams and total_grams > 0 else None
+        return fraction, measure_info, None, actual_grams
 
     scale = (float(grams) / 100.0) if isinstance(grams, (int, float)) else None
     return scale, measure_info, servings, actual_grams

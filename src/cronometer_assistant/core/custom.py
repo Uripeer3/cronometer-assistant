@@ -11,7 +11,7 @@ from typing import Any
 
 from cronometer_mcp.client import CronometerError
 
-from ..auth import CronometerSessionClient
+from ..auth import AuthError, CronometerSessionClient, SessionExpiredError
 from ..nutrition import (
     ValidationError,
     clean_text,
@@ -121,6 +121,78 @@ class CustomFoodService:
 
         return len(mismatches) == 0, mismatches
 
+    @staticmethod
+    def _canonical_nutrients_input(nutrients: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(nutrients, dict) or not nutrients:
+            raise ValidationError("Provide at least one nutrient")
+        out: dict[str, Any] = {}
+        for k, v in nutrients.items():
+            key = str(k).strip()
+            if isinstance(v, dict):
+                out[key] = {
+                    "amount": float(v["amount"])
+                    if isinstance(v.get("amount"), (int, float))
+                    and not isinstance(v.get("amount"), bool)
+                    else v.get("amount"),
+                    "unit": str(v["unit"]).strip()
+                    if isinstance(v.get("unit"), str)
+                    else v.get("unit"),
+                }
+            elif isinstance(v, (int, float)) and not isinstance(v, bool):
+                out[key] = float(v)
+            else:
+                out[key] = v
+        return out
+
+    def _finalize_created_custom_food(
+        self,
+        record: dict[str, Any],
+        *,
+        request_id: str | None,
+        fingerprint: str,
+    ) -> dict[str, Any]:
+        food_id = int(record["food_id"])
+        fresh = self.client.get_food(food_id)
+        verified, mismatches = self._verify_custom_food(
+            fresh,
+            expected_name=record["expected_name"],
+            expected_category=int(record["expected_category"]),
+            expected_label_type=record["expected_label_type"],
+            expected_barcode=record.get("expected_barcode"),
+            expected_measures=record["expected_measures"],
+            expected_nutrients=record["expected_nutrients"],
+        )
+        persisted_barcodes = fresh.get("barcodes") or []
+        extracted_measures = extract_measures(fresh)
+        srv_cf = record["srv_name"].casefold()
+        primary_measure = next(
+            (m for m in extracted_measures if str(m.get("name", "")).casefold() == srv_cf),
+            None,
+        )
+        expected_barcode = record.get("expected_barcode")
+        response: dict[str, Any] = {
+            "food_id": food_id,
+            "name": fresh.get("name"),
+            "category_id": fresh.get("category"),
+            "label_type": fresh.get("labelType"),
+            "default_measure_id": fresh.get("defaultMeasureId"),
+            "primary_measure": primary_measure,
+            "barcodes": persisted_barcodes,
+            "barcode_linked": bool(expected_barcode and expected_barcode in persisted_barcodes),
+            "measures": extracted_measures,
+            "nutrients_set": len(record["expected_nutrients"]),
+            "conversion_notes": record.get("conversion_notes") or [],
+            "verified": verified,
+            "already_created": False,
+        }
+        if mismatches:
+            response["verification_mismatches"] = mismatches
+        if request_id and self.state and verified:
+            self.state.save_idempotent(
+                request_id, "create_custom_food", response, fingerprint=fingerprint
+            )
+        return response
+
     def create_custom_food(
         self,
         name: str,
@@ -146,15 +218,13 @@ class CustomFoodService:
         if type(category_id) is not int or category_id < 0:
             raise ValidationError("category_id must be a non-negative integer")
         valid_barcode = validate_barcode(barcode) if barcode is not None else None
-
-        normalized = normalize_label_nutrients(
-            nutrients,
-            self.client.nutrient_index(),
-            basis_amount=basis_amount,
-            basis_unit=basis_unit,
-            carbohydrate_basis=carbohydrate_basis,
-            density_g_per_ml=density_g_per_ml,
+        basis_val = finite_number(basis_amount, "basis_amount", positive=True)
+        density_val = (
+            finite_number(density_g_per_ml, "density_g_per_ml", positive=True)
+            if density_g_per_ml is not None
+            else None
         )
+        canonical_nutrients = self._canonical_nutrients_input(nutrients)
 
         # Put the primary serving measure FIRST (matching Cronometer's own custom foods) followed
         # by any extra measures, and include the physical 1 g `g` measure at the end.
@@ -198,32 +268,105 @@ class CustomFoodService:
                 }
             )
 
-        fingerprint = hashlib.sha256(
-            json.dumps(
-                {
-                    "name": food_name,
-                    "category_id": category_id,
-                    "barcode": valid_barcode,
-                    "label_type": normalized["label_type"],
-                    "measures": measures,
-                    "nutrients": normalized["nutrients_wire"],
-                },
-                sort_keys=True,
-            ).encode()
-        ).hexdigest()
+        fingerprint = (
+            "v2:"
+            + hashlib.sha256(
+                json.dumps(
+                    {
+                        "name": food_name,
+                        "category_id": category_id,
+                        "barcode": valid_barcode,
+                        "notes": notes,
+                        "basis_amount": basis_val,
+                        "basis_unit": basis_unit,
+                        "carbohydrate_basis": carbohydrate_basis,
+                        "density_g_per_ml": density_val,
+                        "measures": measures,
+                        "nutrients": canonical_nutrients,
+                    },
+                    sort_keys=True,
+                ).encode()
+            ).hexdigest()
+        )
 
         with self._op_lock():
+            normalized: dict[str, Any] | None = None
             if request_id and self.state:
                 existing_op = self.state.get_operation(
-                    request_id, "create_custom_food", fingerprint=fingerprint
+                    request_id, "create_custom_food", verify_fingerprint=False
                 )
                 if existing_op is not None:
+                    saved_fp = existing_op["fingerprint"]
+                    if saved_fp and saved_fp != fingerprint:
+                        if saved_fp.startswith("v2:"):
+                            raise ValidationError(
+                                f"request_id {request_id!r} was already used for a different request payload; "
+                                "use a new request_id for a different meal or food"
+                            )
+                        # Legacy pre-v2 journal record (unprefixed sha256 over normalized payload)
+                        legacy_match = False
+                        try:
+                            normalized = normalize_label_nutrients(
+                                nutrients,
+                                self.client.nutrient_index(),
+                                basis_amount=basis_val,
+                                basis_unit=basis_unit,
+                                carbohydrate_basis=carbohydrate_basis,
+                                density_g_per_ml=density_val,
+                            )
+                            legacy_fp = hashlib.sha256(
+                                json.dumps(
+                                    {
+                                        "name": food_name,
+                                        "category_id": category_id,
+                                        "barcode": valid_barcode,
+                                        "label_type": normalized["label_type"],
+                                        "measures": measures,
+                                        "nutrients": normalized["nutrients_wire"],
+                                    },
+                                    sort_keys=True,
+                                ).encode()
+                            ).hexdigest()
+                            legacy_match = legacy_fp == saved_fp
+                        except (SessionExpiredError, AuthError):
+                            raise
+                        except Exception:
+                            legacy_match = False
+                        if not legacy_match:
+                            saved_data = existing_op["data"]
+                            saved_fid = saved_data.get("food_id")
+                            detail = (
+                                f"food_id={saved_fid}"
+                                if saved_fid
+                                else f"name={saved_data.get('name')!r}"
+                            )
+                            raise ValidationError(
+                                f"Legacy request_id {request_id!r} (status={existing_op['status']}, "
+                                f"{detail}) did not match this payload; check get_my_foods before "
+                                "creating another food"
+                            ) from None
                     if existing_op["status"] == "completed":
                         return {**existing_op["data"], "already_created": True}
+                    if existing_op["status"] == "created" and existing_op["data"].get("food_id"):
+                        return self._finalize_created_custom_food(
+                            existing_op["data"], request_id=request_id, fingerprint=fingerprint
+                        )
                     raise CronometerError(
                         f"Previous create_custom_food attempt for request_id {request_id!r} has an "
                         "uncertain outcome. Check get_my_foods before creating another food."
                     )
+
+            if normalized is None:
+                normalized = normalize_label_nutrients(
+                    nutrients,
+                    self.client.nutrient_index(),
+                    basis_amount=basis_val,
+                    basis_unit=basis_unit,
+                    carbohydrate_basis=carbohydrate_basis,
+                    density_g_per_ml=density_val,
+                )
+
+            if request_id and self.state:
                 self.state.save_operation(
                     request_id,
                     "create_custom_food",
@@ -251,55 +394,36 @@ class CustomFoodService:
             if valid_barcode is not None:
                 food_data["barcodes"] = [valid_barcode]
 
-            created = self.client._request(
+            created = self.client.request_v2(
                 "/api/v2/add_food", {"data": deepcopy(food_data), "config": {"call_version": 1}}
             )
             food_id = created.get("id")
             if type(food_id) is not int or food_id <= 0:
                 raise CronometerError("Cronometer did not return a valid food_id on creation")
 
-            fresh = self.client.get_food(food_id)
-            verified, mismatches = self._verify_custom_food(
-                fresh,
-                expected_name=food_name,
-                expected_category=category_id,
-                expected_label_type=normalized["label_type"],
-                expected_barcode=valid_barcode,
-                expected_measures=measures,
-                expected_nutrients=normalized["nutrients_wire"],
-            )
-            persisted_barcodes = fresh.get("barcodes") or []
-            extracted_measures = extract_measures(fresh)
-            primary_measure = next(
-                (
-                    m
-                    for m in extracted_measures
-                    if str(m.get("name", "")).casefold() == srv_name.casefold()
-                ),
-                None,
-            )
-            response: dict[str, Any] = {
+            created_record = {
                 "food_id": food_id,
-                "name": fresh.get("name"),
-                "category_id": fresh.get("category"),
-                "label_type": fresh.get("labelType"),
-                "default_measure_id": fresh.get("defaultMeasureId"),
-                "primary_measure": primary_measure,
-                "barcodes": persisted_barcodes,
-                "barcode_linked": bool(valid_barcode and valid_barcode in persisted_barcodes),
-                "measures": extracted_measures,
-                "nutrients_set": len(normalized["nutrients_wire"]),
+                "expected_name": food_name,
+                "expected_category": category_id,
+                "expected_label_type": normalized["label_type"],
+                "expected_barcode": valid_barcode,
+                "expected_measures": measures,
+                "expected_nutrients": normalized["nutrients_wire"],
+                "srv_name": srv_name,
                 "conversion_notes": normalized["notes"],
-                "verified": verified,
-                "already_created": False,
             }
-            if mismatches:
-                response["verification_mismatches"] = mismatches
-            if request_id and self.state and verified:
-                self.state.save_idempotent(
-                    request_id, "create_custom_food", response, fingerprint=fingerprint
+            if request_id and self.state:
+                self.state.save_operation(
+                    request_id,
+                    "create_custom_food",
+                    fingerprint=fingerprint,
+                    status="created",
+                    data=created_record,
                 )
-            return response
+
+            return self._finalize_created_custom_food(
+                created_record, request_id=request_id, fingerprint=fingerprint
+            )
 
     def update_custom_food(
         self,
@@ -452,7 +576,7 @@ class CustomFoodService:
                     expected_label_type = normalized["label_type"]
                     food["labelType"] = expected_label_type
 
-            self.client._save_food(food, keep_measures=True)
+            self.client.save_food(food, keep_measures=True)
             fresh = self.client.get_food(food_id)
             verified, mismatches = self._verify_custom_food(
                 fresh,
@@ -483,14 +607,15 @@ class CustomFoodService:
         """Retire (or restore) an owned custom food or recipe safely."""
         if type(food_id) is not int or food_id <= 0:
             raise ValidationError("food_id must be a positive integer")
-        food = self.client.get_food(food_id)
-        if food.get("owner") != self.client.user_id:
-            raise ValidationError(f"Food {food_id} is not one of your custom foods")
-        self.client.retire_custom_food(food_id, retired=retired)
-        fresh = self.client.get_food(food_id)
-        return {
-            "food_id": food_id,
-            "name": fresh.get("name"),
-            "retired": bool(fresh.get("retired")),
-            "verified": bool(fresh.get("retired")) == bool(retired),
-        }
+        with self._op_lock():
+            food = self.client.get_food(food_id)
+            if food.get("owner") != self.client.user_id:
+                raise ValidationError(f"Food {food_id} is not one of your custom foods")
+            self.client.retire_custom_food(food_id, retired=retired)
+            fresh = self.client.get_food(food_id)
+            return {
+                "food_id": food_id,
+                "name": fresh.get("name"),
+                "retired": bool(fresh.get("retired")),
+                "verified": bool(fresh.get("retired")) == bool(retired),
+            }

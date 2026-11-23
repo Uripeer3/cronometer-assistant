@@ -25,7 +25,9 @@ import zipfile
 from pathlib import Path
 
 RELEASE_API = "https://api.github.com/repos/openai/tunnel-client/releases/latest"
+RELEASE_TAG_API_PREFIX = "https://api.github.com/repos/openai/tunnel-client/releases/tags/"
 ASSET_PREFIX = "https://github.com/openai/tunnel-client/releases/download/"
+VERSION_TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 MAX_DOWNLOAD = 150 * 1024 * 1024
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -88,7 +90,8 @@ class NoCredentialRedirect(urllib.request.HTTPRedirectHandler):
 
 def read_public_url(url: str, maximum: int) -> bytes:
     headers = {"User-Agent": "cronometer-assistant-setup"}
-    token = os.environ.get("TUNNEL_RELEASE_API_TOKEN") if url == RELEASE_API else None
+    is_release_api = url == RELEASE_API or url.startswith(RELEASE_TAG_API_PREFIX)
+    token = os.environ.get("TUNNEL_RELEASE_API_TOKEN") if is_release_api else None
     if token:
         if len(token) > 8192 or any(c.isspace() for c in token):
             raise ValueError("Release lookup token has an invalid format")
@@ -136,6 +139,15 @@ def choose_asset(release: dict, system: str, machine: str) -> dict:
     return asset
 
 
+def _ensure_safe_install_paths(destination: Path) -> None:
+    meta_path = destination.with_suffix(".meta.json")
+    for path in (destination.parent.parent, destination.parent, destination, meta_path):
+        if path.is_symlink():
+            raise ValueError(f"Refusing to install tunnel-client through symbolic link: {path}")
+    if destination.parent.exists() and not destination.parent.is_dir():
+        raise ValueError(f"Tunnel-client version path is not a directory: {destination.parent}")
+
+
 def install_archive(payload: bytes, digest: str, destination: Path) -> None:
     if "sha256:" + hashlib.sha256(payload).hexdigest() != digest:
         raise ValueError("Tunnel-client archive checksum mismatch")
@@ -148,7 +160,9 @@ def install_archive(payload: bytes, digest: str, destination: Path) -> None:
         if len(members) != 1 or members[0].file_size > MAX_DOWNLOAD:
             raise ValueError("Unexpected tunnel-client archive contents")
         executable = archive.read(members[0])
+    _ensure_safe_install_paths(destination)
     destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    _ensure_safe_install_paths(destination)
     with tempfile.NamedTemporaryFile(dir=destination.parent, delete=False) as output:
         tmp = Path(output.name)
         try:
@@ -159,10 +173,96 @@ def install_archive(payload: bytes, digest: str, destination: Path) -> None:
             os.replace(tmp, destination)
         finally:
             tmp.unlink(missing_ok=True)
+    meta = {
+        "sha256": hashlib.sha256(executable).hexdigest(),
+        "system": platform.system(),
+        "machine": platform.machine(),
+    }
+    meta_path = destination.with_suffix(".meta.json")
+    with tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", dir=destination.parent, delete=False
+    ) as meta_out:
+        tmp_meta = Path(meta_out.name)
+        try:
+            os.fchmod(meta_out.fileno(), 0o600)
+            json.dump(meta, meta_out, sort_keys=True)
+            meta_out.flush()
+            os.fsync(meta_out.fileno())
+            os.replace(tmp_meta, meta_path)
+        finally:
+            tmp_meta.unlink(missing_ok=True)
 
 
-def acquire_client(folder: Path) -> Path:
-    release = json.loads(read_public_url(RELEASE_API, 2 * 1024 * 1024))
+def validate_client_version(value: str) -> str:
+    if not VERSION_TAG_RE.fullmatch(value):
+        raise ValueError("Client version must use semantic tag format like v1.2.3")
+    return value
+
+
+def _is_verified_cached_binary(version_dir: Path) -> Path | None:
+    if not version_dir.is_dir() or version_dir.is_symlink():
+        return None
+    candidate = version_dir / "tunnel-client"
+    meta_path = candidate.with_suffix(".meta.json")
+    if (
+        not candidate.is_file()
+        or candidate.is_symlink()
+        or not os.access(candidate, os.X_OK)
+        or not meta_path.is_file()
+        or meta_path.is_symlink()
+    ):
+        return None
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        if not isinstance(meta, dict):
+            return None
+        expected_hash = meta.get("sha256")
+        if (
+            not isinstance(expected_hash, str)
+            or meta.get("system") != platform.system()
+            or meta.get("machine") != platform.machine()
+        ):
+            return None
+        actual_hash = hashlib.sha256(candidate.read_bytes()).hexdigest()
+    except (OSError, ValueError):
+        return None
+    return candidate if actual_hash == expected_hash else None
+
+
+def find_cached_client(folder: Path, *, version: str | None = None) -> Path | None:
+    """Return an already-installed, digest-verified tunnel-client binary without network access."""
+    if not folder.is_dir() or folder.is_symlink():
+        return None
+    if version is not None:
+        tag = validate_client_version(version)
+        return _is_verified_cached_binary(folder / tag)
+    cached: list[tuple[tuple[int, int, int], Path]] = []
+    for entry in folder.iterdir():
+        match = VERSION_TAG_RE.fullmatch(entry.name)
+        if not match:
+            continue
+        candidate = _is_verified_cached_binary(entry)
+        if candidate is not None:
+            semver = (int(match.group(1)), int(match.group(2)), int(match.group(3)))
+            cached.append((semver, candidate))
+    if not cached:
+        return None
+    cached.sort(key=lambda item: item[0], reverse=True)
+    return cached[0][1]
+
+
+def acquire_client(folder: Path, *, version: str | None = None, update: bool = False) -> Path:
+    if not update:
+        cached = find_cached_client(folder, version=version)
+        if cached is not None:
+            print(f"Using cached tunnel-client {cached.parent.name}.", flush=True)
+            return cached
+    api_url = (
+        RELEASE_TAG_API_PREFIX + validate_client_version(version)
+        if version is not None
+        else RELEASE_API
+    )
+    release = json.loads(read_public_url(api_url, 2 * 1024 * 1024))
     asset = choose_asset(release, platform.system(), platform.machine())
     destination = folder / release["tag_name"] / "tunnel-client"
     payload = read_public_url(asset["browser_download_url"], MAX_DOWNLOAD)
@@ -211,6 +311,16 @@ def main() -> int:
     parser.add_argument("--tunnel-id", required=True, type=validate_tunnel_id)
     parser.add_argument("--save-key", action="store_true", help="Save runtime key privately")
     parser.add_argument("--client-bin", type=Path, help="Use an installed tunnel-client binary")
+    parser.add_argument(
+        "--client-version",
+        type=validate_client_version,
+        help="Pin a specific official tunnel-client release tag (e.g. v1.2.3)",
+    )
+    parser.add_argument(
+        "--update-client",
+        action="store_true",
+        help="Re-fetch and verify tunnel-client from GitHub instead of reusing a cached binary",
+    )
     parser.add_argument("--db", type=Path, default=ROOT / "data" / "assistant.sqlite")
     parser.add_argument(
         "--session", type=Path, default=ROOT / "data" / "cronometer-session" / "session.json"
@@ -233,7 +343,11 @@ def main() -> int:
             cwd=ROOT,
             check=True,
         )
-        client = args.client_bin.resolve() if args.client_bin else acquire_client(runtime)
+        client = (
+            args.client_bin.resolve()
+            if args.client_bin
+            else acquire_client(runtime, version=args.client_version, update=args.update_client)
+        )
         if not client.is_file() or not os.access(client, os.X_OK):
             raise ValueError("tunnel-client binary is missing or not executable")
         key_path = runtime / "tunnel-api-key"
