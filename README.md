@@ -50,6 +50,7 @@ The codebase separates everyday meal logging from optional features and MCP wiri
 src/cronometer_assistant/
 ├── auth.py              # Private terminal login, 0600 session file, thread-safe client
 ├── nutrition.py         # Label normalization (EU/US carbs, kJ, salt, ml density), barcodes & measures
+├── parsing.py           # Date/time, meal-group, and batch-recipe serving math
 ├── state.py             # Single SQLite DB (food aliases, retry dedup, optional cooking drafts)
 ├── core/                # Everyday meal logging (foods, diary, custom foods & recipes)
 ├── extras/              # Isolated extras (day utilities, targets/scores, biometrics/exercise/fasting)

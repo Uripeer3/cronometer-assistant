@@ -22,6 +22,7 @@ Uses OpenAI's official `tunnel-client` to run this MCP server on your computer a
    ```bash
    python3 scripts/run_tunnel.py --tunnel-id YOUR_TUNNEL_ID --save-key
    ```
+   Subsequent runs reuse the cached `.runtime/vX.Y.Z/tunnel-client` binary without contacting GitHub; pass `--client-version vX.Y.Z` to pin a release or `--update-client` to fetch a newer one.
 3. In ChatGPT's custom MCP settings, select your tunnel and verify tools load.
 
 **Keep running after reboots (optional, Linux `systemd`):**
@@ -158,8 +159,8 @@ Pass an optional flag to `serve` to control which tool groups are exposed:
 
 - **Private local login:** `login` prompts with hidden terminal input and writes only `user_id`, the session token, and account timezone to `data/cronometer-session/session.json` (`0600` in a `0700` directory). Passwords and 2FA codes are never stored; HTTP/token loggers are disabled.
 - **Minimal profile exposure:** `check_connection` returns only timezone, today's date, and nutrition feature flags—never email, birthdate, or third-party integration tokens.
-- **Verified writes & safe retries:** Every diary add, edit, and delete is read back from Cronometer and checked against the requested food, grams, measure, group, and time. Passing `request_id` journals each step in SQLite before writing so interrupted batches reconcile without duplicating entries.
-- **Measure & label safety:** Custom-food edits preserve existing `measureId`s so past diary entries stay intact. Missing nutrients stay unknown (never `0`), and EU/UK/AU/NZ/Israeli labels (`excludes_fiber`) require explicit fiber so total carbohydrates are stored accurately in Cronometer.
+- **Verified writes & safe retries:** Diary adds/edits/deletes, custom-food writes, and recipe saves are read back from Cronometer and verified against the request. Passing `request_id` to `log_food_entries`, `create_custom_food`, or `save_recipe` journals operations in SQLite so retries recover or replay offline without duplicating entries.
+- **Measure, label & read resilience:** Custom-food and recipe edits preserve existing `measureId`s so past diary entries stay intact. Missing nutrients stay unknown (never `0`), EU/UK/AU/NZ/Israeli labels (`excludes_fiber`) require explicit fiber so total carbohydrates are stored accurately, and `get_food_log` falls back to locally computed totals (`nutrient_summary_status: "degraded"`) if Cronometer's nutrition-scores endpoint is unavailable.
 
 ---
 
